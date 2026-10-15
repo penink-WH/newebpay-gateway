@@ -1,0 +1,19 @@
+# 保護設定檔與內部檔案（Apache；若用 nginx 請自行設定相同規則）
+<FilesMatch "^(config\.php|install\.php|.*\.sql)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+RedirectMatch 404 ^/(includes|sql|_dev|demo)/
+
+# 訂單與結果頁不進快取，避免快取到敏感資訊
+<FilesMatch "^(pay_request|pay_notify|pay_result|pay_query)\.php$">
+  <IfModule mod_headers.c>
+    Header set Cache-Control "no-store"
+  </IfModule>
+</FilesMatch>

@@ -1,0 +1,18 @@
+# 實際設定檔（含資料庫密碼、藍新金鑰、管理密碼）— 絕對不要進版控
+config.php
+
+# 測試產物
+demo/callback_log.txt
+demo/callback_receiver.php.bak
+*.log
+
+# 匯出/暫存
+/cache/
+/tmp/
+*.sql.gz
+*.stl
+*.sql.bak
+
+# 作業系統
+.DS_Store
+Thumbs.db
