@@ -149,6 +149,7 @@ if ($flash !== '') {
     echo '<div class="notice">' . nw_e($flash) . '</div>';
 }
 
+echo '<p><a class="btn ghost sm" href="pay_sources_admin.php">來源站台設定（子公司網站）</a></p>';
 echo '<form method="get" class="card" style="background:#fafbfc">';
 echo '<input type="hidden" name="kw" value="' . nw_e($kw) . '">';
 echo '<input type="hidden" name="status" value="' . nw_e($status) . '">';

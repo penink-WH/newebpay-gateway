@@ -50,20 +50,43 @@ function run_sql_file($file)
 
 $out[] = '建立資料表：執行 ' . run_sql_file(dirname(__FILE__) . '/sql/schema.sql') . ' 個語句';
 
+/** 舊版資料庫補欄位（相容 MySQL 4.1+，不用 ADD COLUMN IF NOT EXISTS） */
+function ensure_column($table, $column, $definition)
+{
+    $cols = DB::queryAll('SHOW COLUMNS FROM `' . $table . '`');
+    foreach ($cols as $c) {
+        if ($c['Field'] === $column) {
+            return false;
+        }
+    }
+    DB::exec('ALTER TABLE `' . $table . '` ADD `' . $column . '` ' . $definition);
+    return true;
+}
+
+$added = 0;
+$added += ensure_column('pay_sources', 'result_url', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '預設付款完成後導回來源站頁面'") ? 1 : 0;
+$added += ensure_column('pay_sources', 'allow_ips', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '允許連入的 IP，支援 CIDR'") ? 1 : 0;
+$added += ensure_column('pay_sources', 'allow_origins', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '接受的來源端網站'") ? 1 : 0;
+$added += ensure_column('pay_orders', 'result_url', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '付款完成後導回來源站頁面'") ? 1 : 0;
+$out[] = '舊版資料庫欄位遷移：新增 ' . $added . ' 個欄位';
+
 // 測試來源站台（正式環境請自行建立）
 $demoSecret = 'DEMO-SECRET-123456';
 $demo = array(
     'source_code' => 'demo',
     'source_name' => '測試來源站台',
     'callback_url' => nw_base('demo/callback_receiver.php'),
+    'result_url' => nw_base('demo/callback_receiver.php?type=result'),
     'secret' => $demoSecret,
+    'allow_ips' => '',
+    'allow_origins' => '',
     'allow_hosts' => '',
     'is_active' => 1,
     'remark' => '安裝時自動建立，僅供測試',
     'created_at' => nw_now(),
     'updated_at' => nw_now(),
 );
-DB::upsert('pay_sources', $demo, array('source_name', 'callback_url', 'secret', 'allow_hosts', 'is_active', 'remark', 'updated_at'));
+DB::upsert('pay_sources', $demo, array('source_name', 'callback_url', 'result_url', 'secret', 'allow_ips', 'allow_origins', 'allow_hosts', 'is_active', 'remark', 'updated_at'));
 $out[] = '測試來源站台 demo（secret=' . $demoSecret . '，callback=' . $demo['callback_url'] . '）';
 
 // 補幾筆測試資料（已有資料則跳過）

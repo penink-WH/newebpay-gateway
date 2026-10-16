@@ -56,6 +56,34 @@ function req($method, $url, $fields, $followRedirect)
     return $resp;
 }
 
+/** POST 後取出狀態碼與 Location（PHP 的 HTTP 類別拿不到標頭，這裡借用 curl CLI） */
+function post_and_location($url, $fields)
+{
+    $parts = array();
+    foreach ($fields as $k => $v) {
+        $parts[] = '--data-urlencode ' . escapeshellarg($k . '=' . $v);
+    }
+    $cmd = 'curl -s -o /dev/null -w "%{http_code}|%{redirect_url}" -X POST ' . implode(' ', $parts) . ' ' . escapeshellarg($url);
+    $out = shell_exec($cmd);
+    $out = trim((string)$out);
+    $pos = strpos($out, '|');
+    return array('code' => (int)substr($out, 0, $pos), 'location' => $pos === false ? '' : substr($out, $pos + 1));
+}
+
+/** 直接改 pay_sources 某站台設定欄位（測試用） */
+function set_source_field($code, $field, $value)
+{
+    DB::update('pay_sources', array($field => $value, 'updated_at' => nw_now()), array('source_code' => $code));
+}
+
+/** 還原 demo 站台設定 */
+function reset_demo_source()
+{
+    DB::update('pay_sources', array(
+        'allow_ips' => '', 'allow_origins' => '', 'is_active' => 1, 'updated_at' => nw_now(),
+    ), array('source_code' => 'demo'));
+}
+
 /** 直接組出藍新加密結果，偽造通知用 */
 function fake_notify_fields($order, $status, $message, $tradeNo, $amtOverride = null)
 {
@@ -104,7 +132,7 @@ $r = send_request(array(
     'source' => 'no_such_site', 'source_order_no' => 'X', 'amount' => 100,
     'timestamp' => time(), 'mode' => 'json',
 ), null, $base);
-check('不存在的來源站台被拒絕', strpos($r['body'], '來源站台不存在') !== false, $r['body']);
+check('不存在的來源站台被拒絕（403）', $r['code'] === 403 && strpos($r['body'], '未註冊') !== false, $r['code'] . ' ' . $r['body']);
 
 // ---------------------------------------------------------------- C 線上付款流程
 section('C 線上付款（信用卡）完整流程');
@@ -255,8 +283,9 @@ $r2 = send_request(array(
     'item_desc' => '重複', 'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
 ), null, $base);
 $j2 = json_decode($r2['body'], true);
-check('重複來源訂單編號不會重複建單',
-    is_array($j2) && $j2['ok'] !== true, $r2['body']);
+check('重複來源訂單編號以 409 回應（不重複建單）',
+    is_array($j2) && $j2['ok'] === false && $j2['code'] === 409 && $j2['order_no'] === $orderNo,
+    $r2['code'] . ' ' . $r2['body']);
 $n = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_orders` WHERE `source_order_no` = '{$srcOrder}'", 0);
 check('資料庫中該來源訂單只有一筆', $n === 1, "count={$n}");
 
@@ -298,6 +327,153 @@ $list = Http::postForm($base . '/pay_query.php?kw=' . urlencode($orderNo), array
 check('查詢列表可依訂單編號搜尋', strpos($list['body'], $orderNo) !== false, '');
 $listStatus = Http::postForm($base . '/pay_query.php?status=PAID', array(), 15, $jar);
 check('查詢列表可依狀態篩選', strpos($listStatus['body'], '付款成功') !== false, '');
+
+// ---------------------------------------------------------------- H 兩階段准入管制
+section('H 兩階段准入管制（來源端管控）');
+reset_demo_source();
+$okFields = array(
+    'source' => 'demo', 'source_order_no' => 'GATE-' . $stamp . '-OK', 'amount' => 300,
+    'item_desc' => '准入測試', 'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+$signOk = nw_sign('DEMO-SECRET-123456', $okFields, 'sign');
+$badSign = array_merge($okFields, array('sign' => 'deadbeef'));
+$goodSign = array_merge($okFields, array('sign' => $signOk));
+
+// H1 第一階段：用戶代碼
+$r = Http::postForm($base . '/pay_request.php', array('source' => 'ghost_site', 'amount' => '100', 'timestamp' => time(), 'mode' => 'json', 'sign' => $x = 'x'), 15);
+check('第一階段：未註冊的用戶代碼 → 403', $r['code'] === 403 && strpos($r['body'], '未註冊') !== false, $r['code'] . ' ' . $r['body']);
+$lg = PayGateway::logs('', 1);
+$n = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_logs` WHERE `stage`='ACCESS' AND `action`='STAGE1_DENY' AND `result`='FAIL'", 0);
+check('第一階段拒絕有寫入 ACCESS/STAGE1_DENY 紀錄', $n > 0, "count={$n}");
+
+// H2 停用站台 → 第一階段擋掉
+set_source_field('demo', 'is_active', 0);
+$r = Http::postForm($base . '/pay_request.php', $goodSign, 15);
+check('第一階段：已停用的站台 → 403', $r['code'] === 403 && strpos($r['body'], '停用') !== false, $r['code'] . ' ' . $r['body']);
+set_source_field('demo', 'is_active', 1);
+
+// H3 第二階段：sign（第一階段通過後才比對）
+$r = Http::postForm($base . '/pay_request.php', $badSign, 15);
+check('第二階段：sign 錯誤 → 403', $r['code'] === 403 && strpos($r['body'], 'sign') !== false, $r['code'] . ' ' . $r['body']);
+$n2 = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_logs` WHERE `action`='STAGE2_BAD_SIGN'", 0);
+check('第二階段拒絕有寫入 STAGE2_BAD_SIGN 紀錄', $n2 > 0, "count={$n2}");
+
+// H4 第一階段先擋：IP 不符時，即使 sign 正確也不准進入第二階段
+set_source_field('demo', 'allow_ips', '203.0.113.0/24');
+$r = Http::postForm($base . '/pay_request.php', $goodSign, 15);
+check('IP 不在清單 → 403（即使 sign 正確）', $r['code'] === 403 && strpos($r['body'], 'IP 不在允許清單') !== false, $r['code'] . ' ' . $r['body']);
+$n3 = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_logs` WHERE `action`='STAGE1_DENY' AND `message` LIKE '%IP 不在允許清單%'", 0);
+check('IP 拒絕判定在第二階段之前（STAGE1 而非 STAGE2）', $n3 > 0, "count={$n3}");
+
+// H5 CIDR 比對
+set_source_field('demo', 'allow_ips', '127.0.0.0/8, 10.0.0.0/8');
+$cidrFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-CIDR'));
+$r = Http::postForm($base . '/pay_request.php', array_merge($cidrFields, array('sign' => nw_sign('DEMO-SECRET-123456', $cidrFields, 'sign'))), 15);
+check('CIDR 允許（127.0.0.0/8）→ 訂單建立成功', strpos($r['body'], '"ok":true') !== false, $r['body']);
+set_source_field('demo', 'allow_ips', '127.0.0.1');
+$r = Http::postForm($base . '/pay_request.php', $goodSign, 15);
+check('完整 IP 允許 → 訂單建立成功', strpos($r['body'], '"ok":true') !== false, $r['body']);
+
+// H6 接受的來源網站（Origin/Referer）
+set_source_field('demo', 'allow_ips', '');
+set_source_field('demo', 'allow_origins', 'shop.example.com');
+$r = Http::postForm($base . '/pay_request.php', $goodSign, 15);
+check('設定來源網站但請求未帶 Origin/Referer → 403', $r['code'] === 403 && strpos($r['body'], 'Origin') !== false, $r['code'] . ' ' . $r['body']);
+
+$originFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-ORIGIN'));
+$payload = http_build_query(array_merge($originFields, array('sign' => nw_sign('DEMO-SECRET-123456', $originFields, 'sign'))));
+$cmdOk = 'curl -s -o /dev/null -w "%{http_code}" -X POST -H ' . escapeshellarg('Origin: https://shop.example.com')
+    . ' --data ' . escapeshellarg($payload) . ' ' . escapeshellarg($base . '/pay_request.php');
+$codeOk = (int)trim((string)shell_exec($cmdOk));
+check('Origin 符合允許網站 → 通過（建立訂單）', $codeOk === 200, 'code=' . $codeOk);
+
+$badFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-EVIL'));
+$payloadBad = http_build_query(array_merge($badFields, array('sign' => nw_sign('DEMO-SECRET-123456', $badFields, 'sign'))));
+$cmdBad = 'curl -s -o /dev/null -w "%{http_code}" -X POST -H ' . escapeshellarg('Origin: https://evil.example.org')
+    . ' --data ' . escapeshellarg($payloadBad) . ' ' . escapeshellarg($base . '/pay_request.php');
+$codeBad = (int)trim((string)shell_exec($cmdBad));
+check('Origin 不在允許網站 → 403', $codeBad === 403, 'code=' . $codeBad);
+
+$refFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-REFERER'));
+$payloadRef = http_build_query(array_merge($refFields, array('sign' => nw_sign('DEMO-SECRET-123456', $refFields, 'sign'))));
+$cmdRef = 'curl -s -o /dev/null -w "%{http_code}" -X POST -H ' . escapeshellarg('Referer: https://shop.example.com/cart?id=1')
+    . ' --data ' . escapeshellarg($payloadRef) . ' ' . escapeshellarg($base . '/pay_request.php');
+$codeRef = (int)trim((string)shell_exec($cmdRef));
+check('Referer 符合允許網站 → 通過（無 Origin 時以 Referer 判斷）', $codeRef === 200, 'code=' . $codeRef);
+reset_demo_source();
+
+// H7 來源站台管理頁（登入後可新增站台）
+$newCode = 'sub_' . substr($stamp, -6);
+$jar2 = sys_get_temp_dir() . '/nw_e2e_cookie2_' . getmypid() . '.txt';
+$noAuth2 = Http::postForm($base . '/pay_sources_admin.php', array(), 15);
+check('未登入無法管理來源站台', strpos($noAuth2['body'], 'admin_pwd') !== false && strpos($noAuth2['body'], $newCode) === false, '');
+Http::postForm($base . '/pay_sources_admin.php', array('admin_pwd' => ADMIN_PASSWORD), 15, $jar2);
+$save = Http::postForm($base . '/pay_sources_admin.php', array(
+    'act' => 'save', 'source_code' => $newCode, 'source_name' => '測試子公司站台',
+    'secret' => 'SUB-SECRET-123456', 'allow_ips' => '198.51.100.5, 192.0.2.0/24',
+    'allow_origins' => 'shop.example.com', 'callback_url' => 'https://sub.example.com/notify.php',
+    'result_url' => 'https://sub.example.com/thanks.php', 'allow_hosts' => 'sub.example.com',
+    'is_active' => '1', 'remark' => 'e2e',
+), 15, $jar2);
+$list = Http::postForm($base . '/pay_sources_admin.php', array(), 15, $jar2);
+check('可新增來源站台（用戶代碼/允許IP/來源網站/回呼網址）',
+    strpos($list['body'], $newCode) !== false && strpos($list['body'], '198.51.100.5') !== false
+    && strpos($list['body'], 'https://sub.example.com/notify.php') !== false, '');
+$srcRow = DB::queryRow("SELECT * FROM `pay_sources` WHERE `source_code` = '" . $newCode . "' LIMIT 1");
+check('新增後資料確實寫入 MySQL', $srcRow !== false && $srcRow['allow_ips'] === '198.51.100.5,192.0.2.0/24', $srcRow ? $srcRow['allow_ips'] : 'not found');
+
+// 新站台可正常收款並依其設定回呼（先把本機測試 IP 加進白名單，驗證 IP 管制對新站台同樣生效）
+set_source_field($newCode, 'allow_ips', '198.51.100.5, 127.0.0.1');
+set_source_field($newCode, 'allow_origins', '');
+$subFields = array(
+    'source' => $newCode, 'source_order_no' => 'SUB-' . $stamp, 'amount' => 880,
+    'item_desc' => '子公司訂單', 'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+$r = Http::postForm($base . '/pay_request.php', array_merge($subFields, array('sign' => nw_sign('SUB-SECRET-123456', $subFields, 'sign'))), 15);
+$subJson = json_decode($r['body'], true);
+check('新增站台可直接收款', is_array($subJson) && $subJson['ok'] === true, $r['body']);
+$subOrder = PayGateway::getOrder($subJson['order_no']);
+check('訂單帶入該站台設定的 NOTIFY 回呼網址', $subOrder['callback_url'] === 'https://sub.example.com/notify.php', $subOrder['callback_url']);
+check('訂單帶入該站台設定的 RESULT 導回網址', $subOrder['result_url'] === 'https://sub.example.com/thanks.php', $subOrder['result_url']);
+
+// H8 RESULT：藍新 ReturnURL 導回後，消費者被導向來源站的 RESULT 頁（含簽章）
+// （RESULT 網址在建單當下就寫入訂單，所以要先設定站台設定再建立新訂單）
+reset_demo_source();
+set_source_field('demo', 'result_url', $base . '/demo/callback_receiver.php?type=result');
+$resFields0 = array(
+    'source' => 'demo', 'source_order_no' => 'GATE-' . $stamp . '-RESULT', 'amount' => 260,
+    'item_desc' => 'RESULT 導回測試', 'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+$r = Http::postForm($base . '/pay_request.php', array_merge($resFields0, array('sign' => nw_sign('DEMO-SECRET-123456', $resFields0, 'sign'))), 15);
+$resOrderNo = json_decode($r['body'], true)['order_no'];
+$resOrder = PayGateway::getOrder($resOrderNo);
+check('建立訂單時即帶入來源站的 RESULT 網址',
+    $resOrder['result_url'] === $base . '/demo/callback_receiver.php?type=result', $resOrder['result_url']);
+
+$resFields = fake_notify_fields($resOrder, 'SUCCESS', 'RESULT 測試', 'TRESULT1');
+$loc = post_and_location($base . '/pay_notify.php?src=return', $resFields);
+check('ReturnURL 以 302 導向來源站 RESULT 頁', $loc['code'] === 302 && strpos($loc['location'], 'type=result') !== false,
+    'code=' . $loc['code'] . ' loc=' . $loc['location']);
+check('RESULT 網址帶有訂單編號', strpos($loc['location'], 'order_no=' . $resOrderNo) !== false, $loc['location']);
+check('RESULT 網址帶有簽章 sign', strpos($loc['location'], 'sign=') !== false, $loc['location']);
+check('RESULT 網址帶有付款狀態', strpos($loc['location'], 'status=PAID') !== false, $loc['location']);
+
+// 未設定 RESULT 的站台 → 導回本站結果頁
+$noResult = array(
+    'source' => 'demo', 'source_order_no' => 'GATE-' . $stamp . '-NORESULT', 'amount' => 260,
+    'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+set_source_field('demo', 'result_url', '');
+$r = Http::postForm($base . '/pay_request.php', array_merge($noResult, array('sign' => nw_sign('DEMO-SECRET-123456', $noResult, 'sign'))), 15);
+$noResOrderNo = json_decode($r['body'], true)['order_no'];
+$loc2 = post_and_location($base . '/pay_notify.php?src=return', fake_notify_fields(PayGateway::getOrder($noResOrderNo), 'SUCCESS', 'ok', 'TRESULT2'));
+check('未設定 RESULT 的站台改導回本站結果頁', $loc2['code'] === 302 && strpos($loc2['location'], 'pay_result.php') !== false,
+    'code=' . $loc2['code'] . ' loc=' . $loc2['location']);
+
+set_source_field('demo', 'result_url', '');
+DB::exec("DELETE FROM `pay_sources` WHERE `source_code` = '" . DB::esc($newCode) . "'");
+@unlink($jar2);
+reset_demo_source();
 
 @unlink($jar);
 

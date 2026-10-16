@@ -44,6 +44,16 @@ function home_page()
     echo '<h2>這支頁面怎麼用</h2>';
     echo '<div class="notice">來源站台以 <code>POST</code> 轉送付款需求到 <code>pay_request.php</code>，'
         . '系統建立訂單後會導到付款資訊確認頁；消費者確認後即依藍新規範導向藍新付款閘道。</div>';
+    echo '<h2>准入管制（不通過一律回 403）</h2>';
+    echo '<table>'
+        . '<tr><th>階段</th><th>檢查項目</th><th>說明</th></tr>'
+        . '<tr><td>第一階段</td><td>用戶代碼 → 允許連入的 IP → 接受的來源網站</td>'
+        . '<td>先擋掉未註冊或非授權來源的請求，未通過不做簽章運算</td></tr>'
+        . '<tr><td>第二階段</td><td>sign 簽章比對 → timestamp 時效</td>'
+        . '<td>第一階段通過才執行；金鑰由雙方私下共用</td></tr>'
+        . '</table>';
+    echo '<p class="muted">各站台的清單與預設回呼網址，請由管理員在 '
+        . '<a href="pay_sources_admin.php">來源站台設定</a> 維護。</p>';
     echo '<table>'
         . '<tr><th>參數</th><th>必填</th><th>說明</th></tr>'
         . '<tr><td>source</td><td>是</td><td>來源站台代號（需先登錄於 pay_sources 或 config.php）</td></tr>'
@@ -52,7 +62,8 @@ function home_page()
         . '<tr><td>item_desc</td><td>否</td><td>商品說明（50 字內）</td></tr>'
         . '<tr><td>buyer_name / buyer_email / buyer_phone</td><td>否</td><td>消費者資訊</td></tr>'
         . '<tr><td>pay_type</td><td>否</td><td>credit（線上付款）/ atm（ATM 虛擬帳號）/ both（預設）</td></tr>'
-        . '<tr><td>callback_url</td><td>否</td><td>付款結果回呼來源站台網址（需在允許網域清單）</td></tr>'
+        . '<tr><td>callback_url</td><td>否</td><td>付款結果回呼來源站台網址 NOTIFY（需在允許網域清單）</td></tr>'
+        . '<tr><td>result_url</td><td>否</td><td>付款完成後導回來源站頁面 RESULT（附加訂單資訊與 sign）</td></tr>'
         . '<tr><td>return_url</td><td>否</td><td>付款完成後導回來源站頁面</td></tr>'
         . '<tr><td>mode</td><td>否</td><td>redirect（預設，302 導到確認頁）/ json（回 JSON）</td></tr>'
         . '<tr><td>timestamp</td><td>是</td><td>Unix 時間戳（±300 秒）</td></tr>'
@@ -64,60 +75,85 @@ function home_page()
 }
 
 // ---------------------------------------------------------------- 步驟 1：接收轉送的付款需求
+// 兩階段准入：先查來源站台與連線來源（IP / 來源網站），通過後才比對 sign，
+// 任一階段不通過一律回 HTTP 403，並留下 ACCESS 階段的拒絕紀錄。
 if ($step === 'receive') {
-    $sourceCode = nw_post('source');
-    $source = PayGateway::getSource($sourceCode);
-    if (!$source) {
-        PayGateway::log('', 'RECEIVE', 'BAD_SOURCE', 'FAIL', '來源站台不存在或未啟用：' . $sourceCode, $_POST, $ip);
-        if (nw_post('mode') === 'json') {
-            nw_json_out(array('ok' => false, 'msg' => '來源站台不存在或未啟用'));
-        }
-        exit('FAIL: source not found');
-    }
+    $post = $_POST;
+    $mode = isset($post['mode']) ? trim($post['mode']) : '';
+    $sourceCode = isset($post['source']) ? trim($post['source']) : '';
+    $siteHost = PayGateway::requestSiteHost();
 
-    $sign = nw_post('sign');
-    $fields = $_POST;
-    unset($fields['sign']);
-    if ($source['secret'] === '' || !nw_verify_sign($source['secret'], $fields, $sign, 'sign')) {
-        PayGateway::log('', 'RECEIVE', 'BAD_SIGN', 'FAIL', '來源站台簽章驗證失敗：' . $sourceCode, array('post' => $fields), $ip);
-        if (nw_post('mode') === 'json') {
-            nw_json_out(array('ok' => false, 'msg' => 'sign 驗證失敗'));
-        }
-        exit('FAIL: sign error');
+    // ---- 第一階段：用戶代碼 + 允許連入的 IP + 接受的來源端網站
+    $gate = PayGateway::accessStage1($sourceCode, $ip);
+    if (!$gate['ok']) {
+        PayGateway::log('', 'ACCESS', 'STAGE1_DENY', 'FAIL', $gate['reason'], array(
+            'source' => $sourceCode,
+            'remote_addr' => $ip,
+            'origin' => isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '',
+            'referer' => isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : '',
+            'posted_keys' => array_keys($post),
+        ), $ip);
+        nw_deny(403, '未授權的來源端（第一階段）', $gate['reason'], $mode);
     }
+    $source = $gate['source'];
 
-    $ts = nw_post('timestamp');
+    // ---- 第二階段：簽章比對（僅第一階段通過才執行）
+    $sign = isset($post['sign']) ? trim($post['sign']) : '';
+    if (!PayGateway::accessStage2($source, $post, $sign)) {
+        PayGateway::log('', 'ACCESS', 'STAGE2_BAD_SIGN', 'FAIL',
+            '來源站台 ' . $sourceCode . ' 簽章驗證失敗', array(
+                'remote_addr' => $ip,
+                'source_site' => $siteHost,
+                'posted' => PayGateway::maskPost($post),
+            ), $ip);
+        nw_deny(403, '未授權的請求（第二階段）', 'sign 驗證失敗，請求已拒絕', $mode);
+    }
+    PayGateway::log('', 'ACCESS', 'STAGE_OK', 'OK',
+        '來源站台 ' . $sourceCode . ' 通過兩階段准入（IP ' . $ip . ($siteHost === '' ? '' : ' / 來源網站 ' . $siteHost) . '）',
+        array('stage1_ip' => $ip, 'stage1_site' => $siteHost), $ip);
+
+    // ---- 重放防護：時間戳過期
+    $ts = isset($post['timestamp']) ? trim($post['timestamp']) : '';
     if ($ts === '' || abs(time() - (int)$ts) > 300) {
-        PayGateway::log('', 'RECEIVE', 'BAD_TIMESTAMP', 'FAIL', 'timestamp 過期或未帶：' . $ts, $fields, $ip);
-        if (nw_post('mode') === 'json') {
-            nw_json_out(array('ok' => false, 'msg' => 'timestamp 過期'));
-        }
-        exit('FAIL: timestamp error');
+        PayGateway::log('', 'ACCESS', 'BAD_TIMESTAMP', 'FAIL',
+            'timestamp 過期或未帶：' . $ts, $post, $ip);
+        nw_deny(403, '請求逾時', 'timestamp 過期或未帶，請重新發起付款', $mode);
     }
 
     $created = PayGateway::createOrder($source, array(
-        'source_order_no' => nw_post('source_order_no'),
-        'amount' => nw_post('amount'),
-        'item_desc' => nw_post('item_desc'),
-        'buyer_name' => nw_post('buyer_name'),
-        'buyer_email' => nw_post('buyer_email'),
-        'buyer_phone' => nw_post('buyer_phone'),
-        'pay_type' => nw_post('pay_type', 'both'),
-        'callback_url' => nw_post('callback_url'),
+        'source_order_no' => isset($post['source_order_no']) ? trim($post['source_order_no']) : '',
+        'amount' => isset($post['amount']) ? trim($post['amount']) : '',
+        'item_desc' => isset($post['item_desc']) ? trim($post['item_desc']) : '',
+        'buyer_name' => isset($post['buyer_name']) ? trim($post['buyer_name']) : '',
+        'buyer_email' => isset($post['buyer_email']) ? trim($post['buyer_email']) : '',
+        'buyer_phone' => isset($post['buyer_phone']) ? trim($post['buyer_phone']) : '',
+        'pay_type' => isset($post['pay_type']) ? trim($post['pay_type']) : 'both',
+        'callback_url' => isset($post['callback_url']) ? trim($post['callback_url']) : '',
+        'result_url' => isset($post['result_url']) ? trim($post['result_url']) : '',
     ), $ip);
 
     if (!$created['ok']) {
-        PayGateway::log('', 'RECEIVE', 'CREATE_FAIL', 'FAIL', $created['msg'], $fields, $ip);
-        if (nw_post('mode') === 'json') {
-            nw_json_out(array('ok' => false, 'msg' => $created['msg']));
+        // 重複轉送同一來源訂單編號：以 409 回應，附既有訂單編號（不重複建單、不出貨）
+        if ($created['order_no'] !== '') {
+            header('HTTP/1.1 409 Conflict');
+            header('Status: 409 Conflict');
+            if ($mode === 'json') {
+                nw_json_out(array('ok' => false, 'code' => 409, 'msg' => $created['msg'], 'order_no' => $created['order_no']));
+            }
+            nw_page_head('訂單已存在', '');
+            echo '<p>' . nw_e($created['msg']) . '</p>';
+            echo '<p><a class="btn ghost" href="' . nw_e(nw_base('pay_result.php') . '?ono=' . urlencode($created['order_no'])) . '">查看訂單狀態</a></p>';
+            nw_page_foot();
+            exit;
         }
-        exit('FAIL: ' . $created['msg']);
+        PayGateway::log('', 'RECEIVE', 'CREATE_FAIL', 'FAIL', $created['msg'], $post, $ip);
+        nw_deny(422, '付款需求資料有誤', $created['msg'], $mode);
     }
 
     $confirmUrl = nw_base('pay_request.php') . '?step=confirm&ono=' . urlencode($created['order_no'])
         . '&t=' . urlencode(req_token($created['order'], $source));
 
-    if (nw_post('mode') === 'json') {
+    if ($mode === 'json') {
         nw_json_out(array(
             'ok' => true,
             'msg' => '訂單已建立',
@@ -128,7 +164,6 @@ if ($step === 'receive') {
     }
     nw_redirect($confirmUrl);
 }
-
 // ---------------------------------------------------------------- 步驟 2：付款資訊確認
 if ($step === 'confirm') {
     $orderNo = nw_get('ono');

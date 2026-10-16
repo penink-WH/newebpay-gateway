@@ -23,6 +23,7 @@
 | 檔案 | 說明 |
 |---|---|
 | `pay_result.php` | 消費者看的付款結果頁（成功 / 失敗 / ATM 虛擬帳號資訊） |
+| `pay_sources_admin.php` | 來源站台（子公司網站）基本資料設定：用戶代碼／允許 IP／來源網站／NOTIFY＋RESULT 回呼網址 |
 | `includes/` | `common.php`（工具與簽章）、`DB.php`、`NewebPayCrypto.php`（藍新 AES/SHA）、`Http.php`、`PayGateway.php`（業務邏輯）、`layout.php` |
 | `sql/schema.sql` | 資料表定義 |
 | `install.php` | 建立資料表、測試來源站台 |
@@ -38,7 +39,7 @@
 | `pay_orders` | 訂單主檔：金額、付款方式、狀態、藍新交易序號、ATM 虛擬帳號、回呼網址與回呼狀態 |
 | `pay_logs` | 事件紀錄：收到轉送（RECEIVE）、導向藍新（DISPATCH）、藍新結果（NOTIFY/RETURN/CUSTOMER）、主動查詢（QUERY）、回呼（CALLBACK），含失敗原因 |
 | `pay_callbacks` | 回呼來源站台逐次紀錄：網址、送出內容、HTTP code、耗時、成功與否 |
-| `pay_sources` | 來源站台設定：回呼網址、簽章金鑰、可回呼網域白名單 |
+| `pay_sources` | 來源站台（子公司）設定：用戶代碼、允許連入的 IP、接受的來源網站、NOTIFY／RESULT 回呼網址、簽章金鑰、可回呼網域白名單、啟用狀態 |
 
 訂單狀態：`CREATED`（已收到需求）→ `CONFIRMED` → `DISPATCHED`（已導向藍新）→ `PAID` / `FAILED` /
 `CANCELLED` / `REFUNDED`；ATM 取號完成時為 `VACC_ISSUED`。
@@ -74,7 +75,45 @@
 
 ---
 
-## 四、來源站台如何轉送付款需求
+## 四、來源端准入管制（兩階段）
+
+收到轉送的 POST 時，依序做兩階段檢查，**任一階段不通過一律回 `HTTP 403`**，
+並寫入 `pay_logs`（`stage=ACCESS`）留下拒絕原因與來源特徵：
+
+| 階段 | 檢查項目 | 設定位置 | 不通過時 |
+|---|---|---|---|
+| **第一階段** | 用戶代碼（來源站台是否存在且啟用） | `pay_sources.source_code` / `is_active` | 403 `STAGE1_DENY` |
+| | 允許連入的 IP（支援完整 IP 與 CIDR，逗號分隔；留空＝不限制） | `pay_sources.allow_ips` | 403 `STAGE1_DENY` |
+| | 接受的來源端網站（比對 `Origin`／`Referer` 主機名，留空＝不檢查） | `pay_sources.allow_origins` | 403 `STAGE1_DENY` |
+| **第二階段** | `sign` 簽章比對（**只在第一階段通過才執行**） | `pay_sources.secret` | 403 `STAGE2_BAD_SIGN` |
+| | `timestamp` 時效（±300 秒，防重放） | — | 403 `BAD_TIMESTAMP` |
+
+設計重點：**先識別來源、再驗簽章**，避免對非授權流量做簽章運算，也減少被拿來
+爆破簽章的機會。通過第一階段後會寫一筆 `ACCESS/STAGE_OK` 紀錄，方便稽核。
+
+補充規則：
+
+- 其他回應碼：`409 Conflict`（同一來源訂單編號重複轉送，附既有訂單編號，不重複出貨）、
+  `422`（付款需求資料有誤，如金額格式）。
+- `mode=json` 時回應格式為 `{"ok":false,"code":403,"msg":"…"}`，方便來源站台記錄原因。
+- IP 比對支援 IPv4 與 CIDR，`::ffff:127.0.0.1` 會自動轉成 IPv4 比對；IPv6 請直接填完整位址。
+- 主機名比對支援子網域：`shop.example.com` 命中 `example.com`，`.example.com` 亦可。
+- `allow_origins` 一旦設定，**未帶 `Origin`／`Referer` 的純 API（伺服器對伺服器）呼叫也會被擋**；
+  這是刻意與藍新「限制來源網站」一致的做法。若子公司走純 API，請留空並改以 `allow_ips` 管制。
+
+### 子公司站台要設定的四項（皆在 `pay_sources_admin.php` 維護）
+
+| 項目 | 欄位 | 說明 |
+|---|---|---|
+| 用戶代碼 | `source_code` | 轉送時帶的 `source` 參數，2~32 碼英數底線 |
+| 允許連入的 IP | `allow_ips` | 第一階段篩選，如 `203.0.113.10, 198.51.100.0/24` |
+| 接受的來源網站 | `allow_origins` | 瀏覽器來源網站稽核，如 `shop.example.com` |
+| 預設回呼網址 NOTIFY | `callback_url` | 付款結果通知（機器對機器 POST，含 sign） |
+| 預設導回網址 RESULT | `result_url` | 消費者付款完成後導回（附加訂單資訊與 sign） |
+
+---
+
+## 五、來源站台如何轉送付款需求
 
 `POST` 打到 `https://你的網域/pay_request.php`（form 或 query string 皆可）：
 
@@ -122,7 +161,7 @@ $fields['sign'] = strtoupper(hash_hmac('sha256', implode('&', $parts), $shopSecr
 
 ---
 
-## 五、回呼來源站台（金流 → 來源站台）
+## 六、回呼來源站台（金流 → 來源站台）
 
 結果確認後，本系統會 `POST`（`application/x-www-form-urlencoded`）到 `callback_url`：
 
@@ -145,7 +184,7 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 六、藍新加解密實作要點
+## 七、藍新加解密實作要點
 
 `includes/NewebPayCrypto.php`，與藍新官方外掛一致：
 
@@ -161,11 +200,11 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 七、測試
+## 八、測試
 
 ```bash
 php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證（14 項）
-php _dev/test_e2e.php       # 端對端：轉送→確認→藍新→結果→回呼（含防偽，共 62 項）
+php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼（含防偽，共 87 項）
 ```
 
 `_dev/mock_newebpay_gateway.php` 模擬藍新（MPG 付款頁、ATM 取號、付款結果回呼、單筆查詢 API），
@@ -186,13 +225,14 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 
 ---
 
-## 八、安全注意事項與上線檢查
+## 九、安全注意事項與上線檢查
 
 - [ ] `config.php` 加入金鑰與資料庫密碼後**不可從網站下載**（已附 `.htaccess`；nginx 請自行設 deny 規則）。
 - [ ] 安裝後刪除 `install.php`、`_dev/`、`demo/`、`sql/`。
 - [ ] `BASE_URL` 必須是藍新可連線的 HTTPS 公開網址；`ALLOW_HTTP` 正式環境必須為 0（僅測試用 1）。
 - [ ] `pay_query.php` 已加密碼保護（`ADMIN_PASSWORD` 或 `ADMIN_KEY`），務必設定。
 - [ ] 來源站台 `pay_sources.allow_hosts` 務必填（限制回呼網域，避免訂單資訊被外送）。
+- [ ] 對外服務的來源站台務必設定 `allow_ips`（IP 白名單）；走瀏覽器導向的站台再加 `allow_origins`。
 - [ ] 來源站台金鑰與藍新金鑰分開保管、不可寫進前端 JS 或公開檔。
 - [ ] 通知端點需允許外站 POST（不要用 IP 白名單擋掉藍新 IP，也不要擋 query string 的 `src`）。
 - [ ] 付款成功以 `NotifyURL`（幕後通知）為準；`ReturnURL` 只用於前台顯示，兩者不可合成同一支程式邏輯。
@@ -200,7 +240,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 - [ ] 日誌中的卡號/token 欄位已遮蔽（`maskPost`），但仍建議設定 `LOG_RAW_POST = 0` 減少敏感資料落地。
 ---
 
-## 九、授權與安全聲明
+## 十、授權與安全聲明
 
 - 程式碼以 **MIT** 授權釋出（見 `LICENSE`），可自由修改再用於商業專案。
 - **金流實作務必自行審查後再上線**：本專案提供了簽章驗證、金額核對、重放防護與回呼記錄，

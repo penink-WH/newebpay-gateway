@@ -116,6 +116,31 @@ function nw_json_out($arr)
     exit;
 }
 
+/**
+ * 未授權回應（HTTP 403）。PHP 5.2 沒有 http_response_code()，用 header 指定狀態碼。
+ * @param string $mode json | html
+ */
+function nw_deny($status, $title, $reason, $mode)
+{
+    $status = (int)$status;
+    header('HTTP/1.1 ' . $status . ' Forbidden');
+    header('Status: ' . $status . ' Forbidden');
+    header('Content-Type: ' . ($mode === 'json' ? 'application/json' : 'text/html') . '; charset=utf-8');
+    header('Cache-Control: no-store');
+
+    if ($mode === 'json') {
+        echo nw_json_encode(array('ok' => false, 'code' => $status, 'msg' => $reason));
+        exit;
+    }
+
+    require_once(dirname(__FILE__) . '/layout.php');
+    nw_page_head($title, 'HTTP ' . $status);
+    echo '<p class="bad">' . nw_e($reason) . '</p>';
+    echo '<p class="muted">此請求已被拒絕並記錄於本系統日誌；若有疑問請洽系統管理員。</p>';
+    nw_page_foot();
+    exit;
+}
+
 function nw_redirect($url)
 {
     header('Location: ' . $url);
@@ -248,11 +273,15 @@ function nw_require_admin()
         return true;
     }
 
+    // 登入後要回到原本的頁面（而不是固定回到查詢頁）
+    $self = (isset($_SERVER['SCRIPT_NAME']) && $_SERVER['SCRIPT_NAME'] !== '')
+        ? basename($_SERVER['SCRIPT_NAME']) : 'pay_query.php';
+    $back = nw_req('back', $self);
+
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_pwd'])) {
         $want = nw_admin_password();
         if ($want !== '' && NewebPayCrypto::safeEquals($want, (string)$_POST['admin_pwd'])) {
             $_SESSION['nw_admin_ok'] = true;
-            $back = nw_req('back', 'pay_query.php');
             nw_redirect($back);
         }
         $error = '密碼錯誤';
@@ -265,7 +294,7 @@ function nw_require_admin()
     if ($error !== '') {
         echo '<p class="bad">' . nw_e($error) . '</p>';
     }
-    echo '<form method="post" action="' . nw_e(nw_req('back', 'pay_query.php')) . '">';
+    echo '<form method="post" action="' . nw_e($self . '?back=' . rawurlencode($back)) . '">';
     echo '<p><input type="password" name="admin_pwd" placeholder="管理密碼" autofocus '
         . 'style="padding:8px 12px;border:1px solid var(--line);border-radius:6px"> ';
     echo '<button class="btn" type="submit">登入</button></p>';

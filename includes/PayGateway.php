@@ -83,13 +83,165 @@ class PayGateway
                 'source_code' => $code,
                 'source_name' => isset($s['name']) ? $s['name'] : $code,
                 'callback_url' => isset($s['callback_url']) ? $s['callback_url'] : '',
+                'result_url' => isset($s['result_url']) ? $s['result_url'] : '',
                 'secret' => isset($s['secret']) ? $s['secret'] : '',
+                'allow_ips' => isset($s['allow_ips']) ? $s['allow_ips'] : '',
+                'allow_origins' => isset($s['allow_origins']) ? $s['allow_origins'] : '',
                 'allow_hosts' => isset($s['allow_hosts']) ? $s['allow_hosts'] : '',
                 'is_active' => 1,
                 'remark' => 'config 內建',
             );
         }
         return false;
+    }
+
+    // ------------------------------------------------------------ 准入管制（兩階段）
+
+    /**
+     * 第一階段：來源站台識別 + 連線來源篩選（IP、Origin/Referer）
+     * 先擋掉「根本不是我們的子公司站台」或「從不該來的地方來的請求」，
+     * 通過後才進入第二階段比對 sign，避免對非授權流量做簽章運算。
+     *
+     * @param string $sourceCode 來源端用戶代碼
+     * @param string $ip         REMOTE_ADDR
+     * @return array array('ok'=>bool,'reason'=>string,'source'=>array|false)
+     */
+    static function accessStage1($sourceCode, $ip)
+    {
+        $source = self::getSource($sourceCode);
+        if (!$source) {
+            return array('ok' => false, 'reason' => '來源端用戶代碼未註冊或已停用：' . ($sourceCode === '' ? '(空白)' : $sourceCode), 'source' => false);
+        }
+
+        // 允許連入的 IP（可留空 = 不限制）
+        $allowIps = trim($source['allow_ips']);
+        if ($allowIps !== '') {
+            $rules = self::splitList($allowIps);
+            $hit = false;
+            foreach ($rules as $r) {
+                if (self::ipMatch($ip, $r)) {
+                    $hit = true;
+                    break;
+                }
+            }
+            if (!$hit) {
+                return array('ok' => false, 'reason' => '來源 IP 不在允許清單：' . $ip . '（允許：' . $allowIps . '）', 'source' => $source);
+            }
+        }
+
+        // 接受的來源端網站（藍新同款規則；留空 = 不檢查）
+        $allowOrigins = trim($source['allow_origins']);
+        if ($allowOrigins !== '') {
+            $host = self::requestSiteHost();
+            if ($host === '') {
+                return array('ok' => false, 'reason' => '要求來源網站稽核，但請求未帶 Origin/Referer（允許：' . $allowOrigins . '）', 'source' => $source);
+            }
+            $rules = self::splitList($allowOrigins);
+            $hit = false;
+            foreach ($rules as $r) {
+                if (self::hostMatch($host, $r)) {
+                    $hit = true;
+                    break;
+                }
+            }
+            if (!$hit) {
+                return array('ok' => false, 'reason' => '來源網站不在允許清單：' . $host . '（允許：' . $allowOrigins . '）', 'source' => $source);
+            }
+        }
+
+        return array('ok' => true, 'reason' => '', 'source' => $source);
+    }
+
+    /**
+     * 第二階段：簽章比對（僅在第一階段通過後執行）
+     * @return bool
+     */
+    static function accessStage2($source, $post, $sign)
+    {
+        if ($source['secret'] === '') {
+            return false;
+        }
+        $fields = $post;
+        unset($fields['sign']);
+        return nw_verify_sign($source['secret'], $fields, $sign, 'sign');
+    }
+
+    /** 逗號／分號／空白分隔的字串轉陣列 */
+    static function splitList($s)
+    {
+        $parts = preg_split('/[\s,;]+/', (string)$s, -1, PREG_SPLIT_NO_EMPTY);
+        return is_array($parts) ? $parts : array();
+    }
+
+    /** 取得請求的來源網站主機名（Origin 優先，其次 Referer）；PHP 5.2 無 $_SERVER['HTTP_ORIGIN'] 保證 */
+    static function requestSiteHost()
+    {
+        $candidates = array();
+        if (isset($_SERVER['HTTP_ORIGIN'])) {
+            $candidates[] = $_SERVER['HTTP_ORIGIN'];
+        }
+        if (isset($_SERVER['HTTP_REFERER'])) {
+            $candidates[] = $_SERVER['HTTP_REFERER'];
+        }
+        foreach ($candidates as $u) {
+            $host = parse_url($u, PHP_URL_HOST);
+            if ($host) {
+                return strtolower($host);
+            }
+        }
+        return '';
+    }
+
+    /** 主機名比對：完全相同，或以允許值結尾（shop.example.com 命中 example.com） */
+    static function hostMatch($host, $rule)
+    {
+        $host = strtolower(trim($host));
+        $rule = strtolower(trim($rule));
+        if ($rule === '') {
+            return false;
+        }
+        if ($host === $rule) {
+            return true;
+        }
+        if (substr($rule, 0, 1) === '.' && substr($host, -strlen($rule)) === $rule) {
+            return true;
+        }
+        if (substr($rule, 0, 1) !== '.' && substr($host, -strlen('.' . $rule)) === '.' . $rule) {
+            return true;
+        }
+        return false;
+    }
+
+    /** IP 比對：完全相同或 CIDR（含 IPv4；IPv4-mapped IPv6 會先轉成 IPv4） */
+    static function ipMatch($ip, $rule)
+    {
+        $ip = trim((string)$ip);
+        $rule = trim((string)$rule);
+        if ($ip === '' || $rule === '') {
+            return false;
+        }
+        if (strpos($rule, '/') === false) {
+            return $ip === $rule;
+        }
+        if (strpos($ip, ':') !== false && strpos($ip, '.') !== false) {
+            $ip = substr($ip, strpos($ip, ':') + 1);      // ::ffff:127.0.0.1 → 127.0.0.1
+        }
+        if (strpos($ip, ':') !== false || strpos($rule, ':') !== false) {
+            return false;                                  // 不支援 IPv6 CIDR，請填完整 IP
+        }
+        $bits = explode('/', $rule, 2);
+        $net = $bits[0];
+        $mask = isset($bits[1]) ? (int)$bits[1] : 32;
+        $ipLong = ip2long($ip);
+        $netLong = ip2long($net);
+        if ($ipLong === false || $netLong === false || $mask < 0 || $mask > 32) {
+            return false;
+        }
+        if ($mask === 0) {
+            return true;
+        }
+        $maskLong = (-1 << (32 - $mask)) & 0xFFFFFFFF;
+        return (($ipLong & $maskLong) === ($netLong & $maskLong));
     }
 
     /** 回呼網址是否在允許清單（避免被當成跳板外傳訂單資訊） */
@@ -142,6 +294,15 @@ class PayGateway
             $callbackUrl = $source['callback_url'];
         }
 
+        $resultUrl = trim((string)$in['result_url']);
+        if ($resultUrl !== '') {
+            if (!self::callbackAllowed($resultUrl, $source)) {
+                return array('ok' => false, 'msg' => 'result_url 不在允許清單內或非 https', 'order_no' => '', 'order' => null);
+            }
+        } else {
+            $resultUrl = $source['result_url'];
+        }
+
         // 冪等：同一來源 + 同一來源訂單編號只允許一筆（避免來源站台重送造成重複出貨）
         $exist = DB::queryRow("SELECT * FROM `pay_orders` WHERE `source_code` = '" . DB::esc($source['source_code'])
             . "' AND `source_order_no` = '" . DB::esc($sourceOrderNo) . "' LIMIT 1");
@@ -176,6 +337,7 @@ class PayGateway
             'status' => 'CREATED',
             'status_msg' => '已收到 ' . $source['source_name'] . ' 轉送的付款需求',
             'callback_url' => $callbackUrl,
+            'result_url' => $resultUrl,
             'callback_state' => 'PENDING',
             'request_ip' => $ip,
             'created_at' => nw_now(),
@@ -490,6 +652,36 @@ class PayGateway
             }
         }
         return '';
+    }
+
+    /**
+     * 組出付款完成後要導回來源站台（RESULT）的網址
+     * 附加訂單資訊與簽章，方便來源站台直接確認這筆付款
+     */
+    static function buildResultUrl($order)
+    {
+        $params = array(
+            'order_no' => $order['order_no'],
+            'source_order_no' => $order['source_order_no'],
+            'status' => $order['status'],
+            'status_text' => nw_status_text($order['status']),
+            'amount' => (int)$order['amount'],
+            'neweb_trade_no' => $order['neweb_trade_no'],
+            'payment_type' => $order['payment_type'],
+            'pay_time' => $order['pay_time'],
+            'virtual_account' => $order['virtual_account'],
+            'bank_code' => $order['bank_code'],
+            'bank_name' => $order['bank_name'],
+            'branch_name' => $order['branch_name'],
+            'expire_date' => $order['expire_date'],
+            'timestamp' => time(),
+        );
+        $source = self::getSource($order['source_code']);
+        if ($source && $source['secret'] !== '') {
+            $params['sign'] = nw_sign($source['secret'], $params, 'sign');
+        }
+        $sep = (strpos($order['result_url'], '?') === false) ? '?' : '&';
+        return $order['result_url'] . $sep . NewebPayCrypto::buildQuery($params);
     }
 
     // ------------------------------------------------------------ 回呼來源站台

@@ -27,10 +27,17 @@ if (count($post) === 0) {
 
 $res = PayGateway::handleIncoming($post, $src, $ip);
 
-// ---- 前台返回：導向結果頁給消費者看
+// ---- 前台返回：導向結果頁給消費者看（若來源站台有設定 RESULT 頁則導回該站台）
 if ($src === 'return') {
     if ($res['order_no'] !== '') {
-        nw_redirect(nw_base('pay_result.php') . '?ono=' . urlencode($res['order_no']));
+        $order = PayGateway::getOrder($res['order_no']);
+        $target = '';
+        if ($order && trim($order['result_url']) !== '') {
+            $target = PayGateway::buildResultUrl($order);
+        } else {
+            $target = nw_base('pay_result.php') . '?ono=' . urlencode($res['order_no']);
+        }
+        nw_redirect($target);
     }
     header('Content-Type: text/plain; charset=utf-8');
     echo 'FAIL: ' . $res['msg'];
