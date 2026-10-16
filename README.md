@@ -202,10 +202,36 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ## 八、測試
 
+### 一鍵測試（推薦給非工程人員）
+
+```bash
+bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 101 項測試 → 印出網址
+bash _dev/run_tests.sh stop   # 關掉測試服務
+```
+
+它會自己處理：啟動測試用 MariaDB（資料放 `/tmp/nwmysql`，**不碰你正式資料庫**、
+重開機自動消失）、補齊資料表、啟動 PHP 伺服器、跑兩套測試。
+跑完服務會留著，你可以直接用瀏覽器操作：
+
+| 網址 | 用途 |
+|---|---|
+| `http://127.0.0.1:8811/demo/source_site.php` | 模擬公司其他網站送出付款需求 |
+| `http://127.0.0.1:8811/pay_request.php` | 付款閘道說明頁 |
+| `http://127.0.0.1:8811/pay_query.php` | 交易查詢（後台密碼見 `config.php` 的 `ADMIN_PASSWORD`） |
+| `http://127.0.0.1:8811/pay_sources_admin.php` | 子公司站台設定（IP／來源網站／回呼網址） |
+| `http://127.0.0.1:8811/demo/callback_receiver.php` | 看來源站台實際收到的回呼 |
+| `http://127.0.0.1:8811/_dev/mock_newebpay_gateway.php` | 模擬藍新（可測刷卡成功／失敗／ATM 取號） |
+
+### 個別測試
+
 ```bash
 php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證（14 項）
 php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼（含防偽，共 87 項）
 ```
+
+> `test_e2e.php` 會在資料庫建立測試訂單、並實際送出回呼給 `demo` 站台，
+> 請在**測試資料庫**上執行。若把 `config.php` 的 `NEWEB_GATEWAY_URL`／`NEWEB_QUERY_URL`
+> 指向藍新正式或測試主機，「向藍新查詢」那一段會真的打過去（其餘流程都只在本機跑）。
 
 `_dev/mock_newebpay_gateway.php` 模擬藍新（MPG 付款頁、ATM 取號、付款結果回呼、單筆查詢 API），
 `demo/source_site.php` 模擬來源站台。測試時 `config.php` 把
