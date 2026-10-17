@@ -522,6 +522,54 @@ DB::exec("DELETE FROM `pay_sources` WHERE `source_code` = '" . DB::esc($newCode)
 @unlink($jar2);
 reset_demo_source();
 
+// ---------------------------------------------------------------- J 金額防呆（元 vs 分）
+section('J 金額上限與「元/分」防呆');
+$srcRow = DB::queryRow("SELECT * FROM `pay_sources` WHERE `source_code` = 'demo' LIMIT 1");
+DB::update('pay_sources', array('max_amount' => 5000, 'updated_at' => nw_now()), array('source_code' => 'demo'));
+
+$over = array(
+    'source' => 'demo', 'source_order_no' => 'AMT-' . $stamp . '-OVER', 'amount' => 14200,
+    'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+$r = Http::postForm($base . '/pay_request.php', array_merge($over, array('sign' => nw_sign('DEMO-SECRET-123456', $over, 'sign'))), 15);
+$j = json_decode($r['body'], true);
+check('超過站台上限的金額被拒（元/分 防呆）', $r['code'] === 422 && $j['ok'] === false, $r['code'] . ' ' . $r['body']);
+check('拒絕訊息明確提示單位問題', strpos($r['body'], '分') !== false, $r['body']);
+$n = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_orders` WHERE `source_order_no` = 'AMT-{$stamp}-OVER'", 0);
+check('被拒的訂單不會寫入資料庫', $n === 0, "count={$n}");
+
+$okAmt = array(
+    'source' => 'demo', 'source_order_no' => 'AMT-' . $stamp . '-OK', 'amount' => 142,
+    'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+$r = Http::postForm($base . '/pay_request.php', array_merge($okAmt, array('sign' => nw_sign('DEMO-SECRET-123456', $okAmt, 'sign'))), 15);
+$j = json_decode($r['body'], true);
+check('上限內的正常金額可建單', isset($j['ok']) && $j['ok'] === true, $r['body']);
+
+DB::update('pay_sources', array('max_amount' => (int)$srcRow['max_amount'], 'updated_at' => nw_now()), array('source_code' => 'demo'));
+
+// 未設上限時：可疑金額照收，但留下 WARN 提醒（避免誤擋合法的高額訂單）
+$suspicious = array(
+    'source' => 'demo', 'source_order_no' => 'AMT-' . $stamp . '-SUSP', 'amount' => 14200,
+    'pay_type' => 'credit', 'timestamp' => time(), 'mode' => 'json',
+);
+$r = Http::postForm($base . '/pay_request.php', array_merge($suspicious, array('sign' => nw_sign('DEMO-SECRET-123456', $suspicious, 'sign'))), 15);
+$jSusp = json_decode($r['body'], true);
+check('未設上限時可疑金額仍可建單（不誤擋）', isset($jSusp['ok']) && $jSusp['ok'] === true, $r['body']);
+$warn = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_logs` WHERE `action` = 'AMOUNT_SUSPICIOUS'", 0);
+check('可疑金額（整百且金額大）會留下 WARN 紀錄', $warn > 0, "count={$warn}");
+$warnMsg = (string)DB::queryValue("SELECT message FROM `pay_logs` WHERE `action` = 'AMOUNT_SUSPICIOUS' ORDER BY id DESC LIMIT 1", '');
+check('WARN 紀錄有提示元/分換算', strpos($warnMsg, '142 元') !== false, $warnMsg);
+
+check('弱金鑰偵測：示範金鑰會被標示', PayGateway::weakSecretReason('DEMO-SECRET-123456') !== '', '');
+check('弱金鑰偵測：過短金鑰會被標示', PayGateway::weakSecretReason('abc') !== '', '');
+check('弱金鑰偵測：正常金鑰不標示', PayGateway::weakSecretReason('4f8a1c93d7b26e05a9f3c1d84e7b2065') === '', '');
+
+$diag = Http::postForm($base . '/pay_sources_admin.php', array(), 15, $jar);
+check('站台設定頁有設定診斷區塊', strpos($diag['body'], '設定診斷') !== false, '');
+check('站台設定頁列出金額上限欄位', strpos($diag['body'], '單筆金額上限') !== false, '');
+check('站台設定頁對示範金鑰提出警告', strpos($diag['body'], '示範用的測試金鑰') !== false, '');
+
 // ---------------------------------------------------------------- I 模擬面板（回呼各種狀態）
 section('I 模擬面板：各種回呼狀態');
 $simOrderNo = $json['order_no'];

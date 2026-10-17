@@ -67,6 +67,7 @@ $added = 0;
 $added += ensure_column('pay_sources', 'result_url', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '預設付款完成後導回來源站頁面'") ? 1 : 0;
 $added += ensure_column('pay_sources', 'allow_ips', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '允許連入的 IP，支援 CIDR'") ? 1 : 0;
 $added += ensure_column('pay_sources', 'allow_origins', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '接受的來源端網站'") ? 1 : 0;
+$added += ensure_column('pay_sources', 'max_amount', 'INT(11) NOT NULL DEFAULT 0 COMMENT \'單筆金額上限（元）；0=不限制\'') ? 1 : 0;
 $added += ensure_column('pay_orders', 'result_url', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '付款完成後導回來源站頁面'") ? 1 : 0;
 $out[] = '舊版資料庫欄位遷移：新增 ' . $added . ' 個欄位';
 

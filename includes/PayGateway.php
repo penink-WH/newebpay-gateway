@@ -88,6 +88,7 @@ class PayGateway
                 'allow_ips' => isset($s['allow_ips']) ? $s['allow_ips'] : '',
                 'allow_origins' => isset($s['allow_origins']) ? $s['allow_origins'] : '',
                 'allow_hosts' => isset($s['allow_hosts']) ? $s['allow_hosts'] : '',
+                'max_amount' => isset($s['max_amount']) ? $s['max_amount'] : 0,
                 'is_active' => 1,
                 'remark' => 'config 內建',
             );
@@ -266,6 +267,31 @@ class PayGateway
         return in_array(strtolower($host), $allow);
     }
 
+    /**
+     * 檢查簽章金鑰是否為常見的示範／弱值，避免正式環境還在用公開的測試金鑰
+     * @return string  '' 表示沒問題；否則回傳提醒文字
+     */
+    static function weakSecretReason($secret)
+    {
+        $weak = array(
+            'DEMO-SECRET-123456' => '這是本專案公開示範用的測試金鑰',
+            'CHANGE-ME' => '這是設定檔範本裡的預設值',
+            'secret' => '金鑰過於簡單',
+            'test' => '金鑰過於簡單',
+        );
+        $s = trim((string)$secret);
+        if ($s === '') {
+            return '尚未設定簽章金鑰（等於完全不做簽章驗證）';
+        }
+        if (isset($weak[$s])) {
+            return $weak[$s];
+        }
+        if (strlen($s) < 16) {
+            return '金鑰長度僅 ' . strlen($s) . ' 碼，建議至少 16 碼以上';
+        }
+        return '';
+    }
+
     // ------------------------------------------------------------ 訂單
 
     /**
@@ -282,7 +308,16 @@ class PayGateway
             return array('ok' => false, 'msg' => '來源訂單編號必填且不得超過 64 碼', 'order_no' => '', 'order' => null);
         }
         if ($amount <= 0) {
-            return array('ok' => false, 'msg' => '金額格式錯誤（需為整數元）', 'order_no' => '', 'order' => null);
+            return array('ok' => false, 'msg' => '金額格式錯誤（需為整數元，不可有小數或千分位）', 'order_no' => '', 'order' => null);
+        }
+
+        // 金額上限：防止把「分」誤當成「元」（最常見的上線收款錯誤）
+        $maxAmount = isset($source['max_amount']) ? (int)$source['max_amount'] : 0;
+        if ($maxAmount > 0 && $amount > $maxAmount) {
+            self::log('', 'RECEIVE', 'AMOUNT_OVER_LIMIT', 'FAIL',
+                '金額 ' . $amount . ' 元超過站台上限 ' . $maxAmount . ' 元（可能把「分」當成「元」）',
+                array('amount' => $amount, 'max_amount' => $maxAmount), $ip);
+            return array('ok' => false, 'msg' => '金額 ' . $amount . ' 元超過此站台設定的上限 ' . $maxAmount . ' 元；請確認金額單位是「元」而不是「分」', 'order_no' => '', 'order' => null);
         }
 
         $callbackUrl = trim((string)$in['callback_url']);
@@ -353,6 +388,11 @@ class PayGateway
         self::log($data['order_no'], 'RECEIVE', 'CREATE_ORDER', 'OK',
             '收到 ' . $source['source_name'] . ' 付款需求：' . $amount . ' 元',
             $in, $ip);
+        if ($amount >= 10000 && ($amount % 100) === 0) {
+            self::log($data['order_no'], 'RECEIVE', 'AMOUNT_SUSPICIOUS', 'WARN',
+                '金額 ' . $amount . ' 元為整百且金額偏大，請確認來源端不是以「分」送出（' . $amount . ' 分 = ' . ($amount / 100) . ' 元）',
+                array('amount' => $amount, 'hint_cents' => $amount / 100), $ip);
+        }
 
         return array('ok' => true, 'msg' => '訂單已建立', 'order_no' => $data['order_no'], 'order' => $data);
     }

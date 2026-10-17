@@ -40,7 +40,7 @@
 | `pay_orders` | 訂單主檔：金額、付款方式、狀態、藍新交易序號、ATM 虛擬帳號、回呼網址與回呼狀態 |
 | `pay_logs` | 事件紀錄：收到轉送（RECEIVE）、導向藍新（DISPATCH）、藍新結果（NOTIFY/RETURN/CUSTOMER）、主動查詢（QUERY）、回呼（CALLBACK），含失敗原因 |
 | `pay_callbacks` | 回呼來源站台逐次紀錄：網址、送出內容、HTTP code、耗時、成功與否 |
-| `pay_sources` | 來源站台（子公司）設定：用戶代碼、允許連入的 IP、接受的來源網站、NOTIFY／RESULT 回呼網址、簽章金鑰、可回呼網域白名單、啟用狀態 |
+| `pay_sources` | 來源站台（子公司）設定：用戶代碼、允許連入的 IP、接受的來源網站、NOTIFY／RESULT 回呼網址、簽章金鑰、可回呼網域白名單、單筆金額上限、啟用狀態 |
 
 訂單狀態：`CREATED`（已收到需求）→ `CONFIRMED` → `DISPATCHED`（已導向藍新）→ `PAID` / `FAILED` /
 `CANCELLED` / `REFUNDED`；ATM 取號完成時為 `VACC_ISSUED`。
@@ -170,7 +170,22 @@ powershell -ExecutionPolicy Bypass -File .\deploy\windows-deploy.ps1 `
 
 ---
 
-## 六、來源站台如何轉送付款需求
+## 六、常見整合錯誤：金額單位（元 vs 分）
+
+`amount` 一律是**整數元**，不要送分。最常見的坑：後端用分（如 14200 分 = 142 元），
+直接送 `amount=14200`，消費者就會看到 **NT$14,200** —— 測試環境只是數字不對，正式環境就是收款金額錯 100 倍。
+
+系統提供兩道防呆：
+
+| 防呆 | 行為 |
+|---|---|
+| 站台「單筆金額上限」`pay_sources.max_amount` | 金額超過上限 → **HTTP 422 拒單**，訊息直接點名「請確認金額單位是元不是分」 |
+| 可疑金額偵測 | 未設上限但金額 ≥ 10000 且為整百 → 照常建單，但寫 `WARN` 紀錄並提示「若以分送出應為 xxx 元」 |
+
+**請務必為每個來源站台設定金額上限**（例如 100000），上線前用一筆 142 元與一筆 14200 分各測一次，
+確認前者成功、後者被 422 擋下。
+
+## 七、來源站台如何轉送付款需求
 
 `POST` 打到 `https://你的網域/pay_request.php`（form 或 query string 皆可）：
 
@@ -218,7 +233,7 @@ $fields['sign'] = strtoupper(hash_hmac('sha256', implode('&', $parts), $shopSecr
 
 ---
 
-## 七、回呼來源站台（金流 → 來源站台）
+## 八、回呼來源站台（金流 → 來源站台）
 
 結果確認後，本系統會 `POST`（`application/x-www-form-urlencoded`）到 `callback_url`：
 
@@ -241,7 +256,7 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 八、藍新加解密實作要點
+## 九、藍新加解密實作要點
 
 `includes/NewebPayCrypto.php`，與藍新官方外掛一致：
 
@@ -257,7 +272,7 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 九、模擬面板（自我測試用，不用真的打到藍新）
+## 十、模擬面板（自我測試用，不用真的打到藍新）
 
 在**測試環境**（`config.php` 的 `NEWEB_ENV = test`）的交易明細頁會出現「開啟模擬面板」，
 可直接產生下列狀態並觀察 MySQL 的變化。全部需要管理密碼，且 live 環境會直接拒絕。
@@ -281,12 +296,12 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 十、測試
+## 十一、測試
 
 ### 一鍵測試（推薦給非工程人員）
 
 ```bash
-bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 125 項測試 → 印出網址
+bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 138 項測試 → 印出網址
 bash _dev/run_tests.sh stop   # 關掉測試服務
 ```
 
@@ -310,7 +325,7 @@ bash _dev/run_tests.sh stop   # 關掉測試服務
 
 ```bash
 php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證 + 舊版 mysql_* 靜態檢查（20 項）
-php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼＋模擬面板（共 105 項）
+php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼＋模擬面板＋金額防呆（共 118 項）
 ```
 
 > `test_e2e.php` 會在資料庫建立測試訂單、並實際送出回呼給 `demo` 站台，
@@ -335,7 +350,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 
 ---
 
-## 十一、安全注意事項與上線檢查
+## 十二、安全注意事項與上線檢查
 
 - [ ] `config.php` 加入金鑰與資料庫密碼後**不可從網站下載**（已附 `.htaccess`；nginx 請自行設 deny 規則）。
 - [ ] 安裝後刪除 `install.php`、`_dev/`、`demo/`、`sql/`。
@@ -343,6 +358,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 - [ ] `pay_query.php`、`pay_sources_admin.php`、`pay_simulate.php` 已加密碼保護，務必設定密碼。
 - [ ] 正式環境務必把 `NEWEB_ENV` 設為 `live`：模擬面板會在 live 直接拒絕（403）。
 - [ ] 來源站台 `pay_sources.allow_hosts` 務必填（限制回呼網域，避免訂單資訊被外送）。
+- [ ] 每個來源站台都要設定**單筆金額上限**（`max_amount`），避免把「分」當「元」多收 100 倍。
 - [ ] 對外服務的來源站台務必設定 `allow_ips`（IP 白名單）；走瀏覽器導向的站台再加 `allow_origins`。
 - [ ] 來源站台金鑰與藍新金鑰分開保管、不可寫進前端 JS 或公開檔。
 - [ ] 通知端點需允許外站 POST（不要用 IP 白名單擋掉藍新 IP，也不要擋 query string 的 `src`）。
@@ -351,7 +367,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 - [ ] 日誌中的卡號/token 欄位已遮蔽（`maskPost`），但仍建議設定 `LOG_RAW_POST = 0` 減少敏感資料落地。
 ---
 
-## 十二、授權與安全聲明
+## 十三、授權與安全聲明
 
 - 程式碼以 **MIT** 授權釋出（見 `LICENSE`），可自由修改再用於商業專案。
 - **金流實作務必自行審查後再上線**：本專案提供了簽章驗證、金額核對、重放防護與回呼記錄，

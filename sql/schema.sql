@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS `pay_sources` (
   `allow_ips`    VARCHAR(255) NOT NULL DEFAULT '' COMMENT '允許連入的 IP，逗號分隔，支援 CIDR；空=不限制（第一階段篩選）',
   `allow_origins` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '接受的來源端網站（Origin/Referer 主機名），逗號分隔；空=不檢查',
   `allow_hosts`  VARCHAR(255) NOT NULL DEFAULT '' COMMENT '回呼網域白名單，逗號分隔；空=不檢查',
+  `max_amount`   INT(11)      NOT NULL DEFAULT '0' COMMENT '單筆金額上限（元）；0=不限制。防止把「分」當成「元」',
   `is_active`    TINYINT(1)   NOT NULL DEFAULT '1',
   `remark`       VARCHAR(255) NOT NULL DEFAULT '',
   `created_at`   DATETIME     NOT NULL,

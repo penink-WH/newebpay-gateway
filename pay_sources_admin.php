@@ -63,6 +63,7 @@ if ($act === 'save') {
     $allowIps = clean_rule_list(nw_post('allow_ips'));
     $allowOrigins = clean_rule_list(nw_post('allow_origins'));
     $allowHosts = clean_rule_list(nw_post('allow_hosts'));
+    $maxAmount = nw_money(nw_post('max_amount', '0'));
     $isActive = nw_post('is_active') === '1' ? 1 : 0;
     $remark = nw_truncate(nw_post('remark'), 255);
 
@@ -79,6 +80,7 @@ if ($act === 'save') {
             'allow_ips' => nw_truncate($allowIps, 255),
             'allow_origins' => nw_truncate($allowOrigins, 255),
             'allow_hosts' => nw_truncate($allowHosts, 255),
+            'max_amount' => $maxAmount,
             'is_active' => $isActive,
             'remark' => $remark,
             'updated_at' => nw_now(),
@@ -143,6 +145,35 @@ function v($row, $key, $default)
 }
 
 nw_page_head('來源站台設定', '子公司／各網站的准入與回呼設定');
+
+function diag_row($ok, $label, $detail)
+{
+    $tag = $ok ? '<span class="ok">✔</span>' : '<span class="warn">⚠</span>';
+    echo '<tr><td class="k">' . $tag . ' ' . nw_e($label) . '</td><td>' . $detail . '</td></tr>';
+}
+echo '<h2>設定診斷</h2><table>';
+diag_row(strpos(BASE_URL, 'https://') === 0, 'BASE_URL 使用 HTTPS',
+    nw_e(BASE_URL) . (strpos(BASE_URL, 'https://') === 0 ? '' : '　→ <b class="warn">藍新與回呼都走明文，請改 https</b>'));
+$weakGlobal = PayGateway::weakSecretReason(NEWEB_HASH_KEY);
+diag_row($weakGlobal === '', '藍新金鑰（NEWEB_HASH_KEY）',
+    $weakGlobal === '' ? '長度 ' . strlen(NEWEB_HASH_KEY) . ' 碼，看起來正常' : '<b class="warn">' . nw_e($weakGlobal) . '</b>');
+diag_row(NEWEB_ENV === 'live', '環境設定',
+    nw_e(NEWEB_ENV === 'live' ? '正式環境（live）' : '測試環境（test）')
+    . (NEWEB_ENV === 'test' ? '　→ <b class="warn">正式收款前務必改成 live</b>' : ''));
+$weakDemo = 0;
+$noIp = 0;
+foreach (DB::queryAll('SELECT source_code, allow_ips, secret FROM `pay_sources`') as $r) {
+    if (PayGateway::weakSecretReason($r['secret']) !== '') { $weakDemo++; }
+    if (trim($r['allow_ips']) === '') { $noIp++; }
+}
+diag_row($weakDemo === 0, '各站台簽章金鑰',
+    $weakDemo === 0 ? '全部正常' : '<b class="warn">' . $weakDemo . ' 個站台仍是示範或過短的金鑰，請在上表重新產生</b>');
+diag_row($noIp === 0, '各站台允許連入的 IP',
+    $noIp === 0 ? '全部已設定' : '<b class="warn">' . $noIp . ' 個站台未設 allow_ips（不限制來源 IP）。'
+    . '若來源站有固定出口 IP，建議填寫；若 IP 會變動則請改用「接受的來源網站」或 VPN／專網</b>');
+diag_row(ALLOW_HTTP != 1, '允許非 HTTPS 回呼',
+    ALLOW_HTTP != 1 ? '關閉（正式環境正確）' : '<b class="warn">ALLOW_HTTP=1，正式環境應為 0</b>');
+echo '</table>';
 if ($flash !== '') {
     echo '<div class="notice">' . nw_e($flash) . '</div>';
 }
@@ -160,9 +191,9 @@ if ($err !== '') {
 
 <h2>站台清單</h2>
 <table>
-  <tr><th>用戶代碼</th><th>站台名稱</th><th>允許 IP</th><th>來源網站</th><th>NOTIFY 回呼</th><th>RESULT 導回</th><th>狀態</th><th>操作</th></tr>
+  <tr><th>用戶代碼</th><th>站台名稱</th><th>允許 IP</th><th>來源網站</th><th>金額上限</th><th>NOTIFY 回呼</th><th>RESULT 導回</th><th>狀態</th><th>操作</th></tr>
 <?php if (count($rows) === 0) { ?>
-  <tr><td colspan="8" class="muted">尚未建立來源站台</td></tr>
+  <tr><td colspan="9" class="muted">尚未建立來源站台</td></tr>
 <?php } ?>
 <?php foreach ($rows as $r) { ?>
   <tr>
@@ -170,9 +201,11 @@ if ($err !== '') {
     <td><?php echo nw_e($r['source_name']); ?></td>
     <td><?php echo $r['allow_ips'] === '' ? '<span class="muted">不限</span>' : nw_e($r['allow_ips']); ?></td>
     <td><?php echo $r['allow_origins'] === '' ? '<span class="muted">不檢查</span>' : nw_e($r['allow_origins']); ?></td>
+    <td><?php echo ((int)$r['max_amount'] > 0) ? number_format($r['max_amount']) . ' 元' : '<span class="muted">不限</span>'; ?></td>
     <td style="word-break:break-all"><?php echo $r['callback_url'] === '' ? '<span class="muted">-</span>' : nw_e($r['callback_url']); ?></td>
     <td style="word-break:break-all"><?php echo $r['result_url'] === '' ? '<span class="muted">-</span>' : nw_e($r['result_url']); ?></td>
-    <td class="<?php echo $r['is_active'] ? 'ok' : 'bad'; ?>"><?php echo $r['is_active'] ? '啟用' : '停用'; ?></td>
+    <td class="<?php echo $r['is_active'] ? 'ok' : 'bad'; ?>"><?php echo $r['is_active'] ? '啟用' : '停用'; ?>
+      <?php $weak = PayGateway::weakSecretReason($r['secret']); if ($weak !== '') { echo '<br><span class="warn">⚠ 金鑰：' . nw_e($weak) . '</span>'; } ?></td>
     <td>
       <a class="btn ghost sm" href="pay_sources_admin.php?edit=<?php echo urlencode($r['source_code']); ?>">編輯</a>
       <a class="btn ghost sm" href="pay_sources_admin.php?act=toggle&code=<?php echo urlencode($r['source_code']); ?>"><?php echo $r['is_active'] ? '停用' : '啟用'; ?></a>
@@ -193,6 +226,8 @@ if ($err !== '') {
     <tr><td class="k">接受的來源網站</td><td><input name="allow_origins" size="60" value="<?php echo nw_e(v($edit, 'allow_origins', '')); ?>" placeholder="shop.example.com, .example.com"><br><span class="muted">比對瀏覽器的 Origin / Referer 主機名（同藍新限制來源網站的作法）。留空 = 不檢查；設定後未帶 Origin/Referer 的純 API 呼叫會被擋。</span></td></tr>
     <tr><td class="k">預設回呼網址 NOTIFY</td><td><input name="callback_url" size="60" value="<?php echo nw_e(v($edit, 'callback_url', '')); ?>" placeholder="https://shop.example.com/pay_notify.php"><br><span class="muted">付款結果通知（機器對機器 POST，含 sign）。</span></td></tr>
     <tr><td class="k">預設導回網址 RESULT</td><td><input name="result_url" size="60" value="<?php echo nw_e(v($edit, 'result_url', '')); ?>" placeholder="https://shop.example.com/thanks.php"><br><span class="muted">消費者付款完成後導回此頁（附加訂單資訊與 sign）。</span></td></tr>
+    <tr><td class="k">單筆金額上限（元）</td><td><input name="max_amount" size="12" value="<?php echo nw_e(v($edit, 'max_amount', '0')); ?>" placeholder="0"><br>
+    <span class="muted">0 = 不限制。建議設定（例如 100000），可擋下來源端把「分」誤當成「元」而多收 100 倍。</span></td></tr>
     <tr><td class="k">可回呼網域</td><td><input name="allow_hosts" size="60" value="<?php echo nw_e(v($edit, 'allow_hosts', '')); ?>" placeholder="shop.example.com, api.example.com"><br><span class="muted">限制請求自帶的 callback_url / result_url 只能指向這些網域；留空 = 不檢查。</span></td></tr>
     <tr><td class="k">啟用</td><td><label><input type="checkbox" name="is_active" value="1" <?php echo $edit && !$edit['is_active'] ? '' : 'checked'; ?>> 啟用（取消勾選＝拒絕所有付款需求）</label></td></tr>
     <tr><td class="k">備註</td><td><input name="remark" size="60" value="<?php echo nw_e(v($edit, 'remark', '')); ?>"></td></tr>

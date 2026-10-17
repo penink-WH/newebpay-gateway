@@ -33,6 +33,9 @@
   ＊ 回呼可靠：HMAC 簽章、逾時重試、逐次記錄 HTTP 與回應內容
   ＊ 防重複出貨：同一狀態不重複回呼；重複轉送同一訂單編號不會重複建單
   ＊ 防偽造：TradeSha 驗證、金額核對、timestamp 防重放
+  ＊ 金額防呆：每個站台可設單筆金額上限，擋下「把分當成元」多收 100 倍的
+    上線事故；可疑金額另留 WARN 紀錄
+  ＊ 設定診斷：後台一頁看出 HTTPS、live/test、金鑰強度、哪些站台沒設 IP 白名單
   ＊ 模擬面板：測試環境可自行產生成功／失敗／取消／取號／重複通知／
     偽造通知／金額不符／回呼失敗等各種狀態，不必真的打到藍新就能自我驗證
   ＊ 雙環境：測試（ccore）／正式（core）一鍵切換
@@ -109,6 +112,6 @@
   GitHub   ： https://github.com/penink-WH/newebpay-gateway
   授權     ： MIT License
   語言     ： PHP（相容 5.2 以上）、SQL
-  測試     ： _dev/run_tests.sh（一鍵）、test_crypto.php（14 項）、test_e2e.php（105 項）
+  測試     ： _dev/run_tests.sh（一鍵）、test_crypto.php（20 項）、test_e2e.php（118 項）
   Windows  ： deploy\windows-deploy.cmd（自動部署 + 自我檢查）
   專案頁   ： https://wh-penink.pages.dev/projects/newebpay-gateway/

@@ -28,7 +28,27 @@ if (!defined('BASE_URL')) {
         $__cfg = dirname(__FILE__) . '/../config.php';
     }
     if (!file_exists($__cfg)) {
-        die('找不到設定檔（' . $__cfg . '），請由 config.sample.php 複製一份並填入參數');
+        $__dir = str_replace('\\', '/', dirname(__FILE__) . '/..');
+        if (!headers_sent()) {
+            header('Content-Type: text/html; charset=utf-8');
+        }
+        die('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">'
+            . '<title>尚未建立設定檔</title>'
+            . '<style>body{font:15px/1.8 -apple-system,"PingFang TC",sans-serif;max-width:640px;margin:60px auto;padding:0 16px;color:#22262e}'
+            . 'pre{background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;overflow:auto}</style></head><body>'
+            . '<h2>尚未建立設定檔</h2>'
+            . '<p>這是藍新金流付款閘道。請先複製一份設定檔並填入參數：</p>'
+            . '<pre>cp ' . $__dir . '/config.sample.php ' . $__dir . '/config.php</pre>'
+            . '<p>Windows：</p><pre>copy "' . str_replace('/', '\\', $__dir) . '\\config.sample.php" "'
+            . str_replace('/', '\\', $__dir) . '\\config.php"</pre>'
+            . '<p>接著用「範本 → 設定檔的對照表」填入：</p>'
+            . '<ul><li><code>DB_*</code>：資料庫連線資訊</li>'
+            . '<li><code>NEWEB_MERCHANT_ID / NEWEB_HASH_KEY / NEWEB_HASH_IV</code>：藍新金流後台「商店資料設定 → 串接設定」取得</li>'
+            . '<li><code>NEWEB_ENV</code>：測試請用 <code>test</code>，正式收款改成 <code>live</code></li>'
+            . '<li><code>BASE_URL</code>：這個網站的公開網址，<b>必須是藍新伺服器打得進來的 HTTPS 網址</b></li>'
+            . '<li><code>ADMIN_PASSWORD</code>：後台（交易查詢、站台設定、模擬面板）的密碼</li></ul>'
+            . '<p>完成後再開一次本頁即可。接著執行 <code>php install.php</code> 建立資料表，'
+            . '或直接用 <code>deploy\\windows-deploy.ps1</code> 一鍵完成。</p></body></html>');
     }
     require_once($__cfg);
 }
