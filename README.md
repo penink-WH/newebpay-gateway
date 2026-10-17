@@ -24,6 +24,7 @@
 |---|---|
 | `pay_result.php` | 消費者看的付款結果頁（成功 / 失敗 / ATM 虛擬帳號資訊） |
 | `pay_sources_admin.php` | 來源站台（子公司網站）基本資料設定：用戶代碼／允許 IP／來源網站／NOTIFY＋RESULT 回呼網址 |
+| `pay_simulate.php` | 模擬面板（僅測試環境）：自己產生各種藍新回呼狀態，驗證回呼是否成功 |
 | `includes/` | `common.php`（工具與簽章）、`DB.php`、`NewebPayCrypto.php`（藍新 AES/SHA）、`Http.php`、`PayGateway.php`（業務邏輯）、`layout.php` |
 | `sql/schema.sql` | 資料表定義 |
 | `install.php` | 建立資料表、測試來源站台 |
@@ -256,12 +257,36 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 九、測試
+## 九、模擬面板（自我測試用，不用真的打到藍新）
+
+在**測試環境**（`config.php` 的 `NEWEB_ENV = test`）的交易明細頁會出現「開啟模擬面板」，
+可直接產生下列狀態並觀察 MySQL 的變化。全部需要管理密碼，且 live 環境會直接拒絕。
+
+| # | 情境 | 預期結果（可在明細頁的時間軸看到） |
+|---|---|---|
+| ① | 藍新回傳付款成功 | 狀態 → `PAID`，回呼 → `SENT`，`pay_callbacks` 有成功紀錄 |
+| ② | ATM 取號（虛擬帳號） | 狀態 → `VACC_ISSUED`，虛擬帳號／銀行／期限寫入訂單，並回呼一次 |
+| ③ | 手動重送回呼 | 強制再送一次（忽略「同狀態不重複回呼」） |
+| ④ | 向藍新查詢 | 呼叫查詢 API，記錄 `QUERY` 事件 |
+| ⑤ | 藍新回傳付款失敗 | 狀態 → `FAILED` 並回呼 |
+| ⑥ | 藍新回傳取消 | 狀態 → `CANCELLED` 並回呼 |
+| ⑦ | 重複通知 | 連送兩次相同通知，**回呼紀錄不增加**（避免重複出貨） |
+| ⑧ | 偽造 TradeSha | 通知被拒（`ACCESS/STAGE2`／`NOTIFY/BAD_SHA`），狀態不變 |
+| ⑨ | 金額不符 | 通知被拒（`NOTIFY/AMT_MISMATCH`），狀態不變 |
+| ⑩ | 來源站台連線失敗 | 暫時改指向拒絕連線的位址，送完還原；`pay_callbacks` 逐次記錄失敗原因，`callback_state` → `FAILED` |
+| ⑪ | 來源站台回應非 `OK` | 暫時換掉簽章金鑰讓對方驗簽失敗，驗證「回應內容未包含 OK」的判定 |
+| ⑫ | 重設訂單 | 回到「已導向藍新」，可重跑整套演練 |
+
+> ⑩⑪ 會暫時改動測試訂單的 `callback_url`／來源站台金鑰，執行後自動還原。
+
+---
+
+## 十、測試
 
 ### 一鍵測試（推薦給非工程人員）
 
 ```bash
-bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 105 項測試 → 印出網址
+bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 125 項測試 → 印出網址
 bash _dev/run_tests.sh stop   # 關掉測試服務
 ```
 
@@ -284,8 +309,8 @@ bash _dev/run_tests.sh stop   # 關掉測試服務
 ### 個別測試
 
 ```bash
-php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證（14 項）
-php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼（含防偽，共 91 項）
+php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證 + 舊版 mysql_* 靜態檢查（20 項）
+php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼＋模擬面板（共 105 項）
 ```
 
 > `test_e2e.php` 會在資料庫建立測試訂單、並實際送出回呼給 `demo` 站台，
@@ -310,12 +335,13 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 
 ---
 
-## 十、安全注意事項與上線檢查
+## 十一、安全注意事項與上線檢查
 
 - [ ] `config.php` 加入金鑰與資料庫密碼後**不可從網站下載**（已附 `.htaccess`；nginx 請自行設 deny 規則）。
 - [ ] 安裝後刪除 `install.php`、`_dev/`、`demo/`、`sql/`。
 - [ ] `BASE_URL` 必須是藍新可連線的 HTTPS 公開網址；`ALLOW_HTTP` 正式環境必須為 0（僅測試用 1）。
-- [ ] `pay_query.php` 已加密碼保護（`ADMIN_PASSWORD` 或 `ADMIN_KEY`），務必設定。
+- [ ] `pay_query.php`、`pay_sources_admin.php`、`pay_simulate.php` 已加密碼保護，務必設定密碼。
+- [ ] 正式環境務必把 `NEWEB_ENV` 設為 `live`：模擬面板會在 live 直接拒絕（403）。
 - [ ] 來源站台 `pay_sources.allow_hosts` 務必填（限制回呼網域，避免訂單資訊被外送）。
 - [ ] 對外服務的來源站台務必設定 `allow_ips`（IP 白名單）；走瀏覽器導向的站台再加 `allow_origins`。
 - [ ] 來源站台金鑰與藍新金鑰分開保管、不可寫進前端 JS 或公開檔。
@@ -325,7 +351,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 - [ ] 日誌中的卡號/token 欄位已遮蔽（`maskPost`），但仍建議設定 `LOG_RAW_POST = 0` 減少敏感資料落地。
 ---
 
-## 十一、授權與安全聲明
+## 十二、授權與安全聲明
 
 - 程式碼以 **MIT** 授權釋出（見 `LICENSE`），可自由修改再用於商業專案。
 - **金流實作務必自行審查後再上線**：本專案提供了簽章驗證、金額核對、重放防護與回呼記錄，

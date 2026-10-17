@@ -522,6 +522,74 @@ DB::exec("DELETE FROM `pay_sources` WHERE `source_code` = '" . DB::esc($newCode)
 @unlink($jar2);
 reset_demo_source();
 
+// ---------------------------------------------------------------- I 模擬面板（回呼各種狀態）
+section('I 模擬面板：各種回呼狀態');
+$simOrderNo = $json['order_no'];
+$simBack = 'pay_query.php?ono=' . $simOrderNo;
+
+// 未登入不可使用
+$simNoAuth = Http::postForm($base . '/pay_simulate.php?act=paid&ono=' . $simOrderNo, array(), 15);
+check('未登入無法使用模擬面板', strpos($simNoAuth['body'], 'admin_pwd') !== false, '');
+
+// 情境：重設 → 偽造通知被拒
+Http::postForm($base . '/pay_simulate.php', array('act' => 'reset', 'ono' => $simOrderNo, 'back' => $simBack), 20, $jar);
+$o3 = PayGateway::getOrder($simOrderNo);
+check('模擬面板：重設後狀態為 DISPATCHED', $o3['status'] === 'DISPATCHED', $o3['status']);
+Http::postForm($base . '/pay_simulate.php', array('act' => 'forged', 'ono' => $simOrderNo, 'back' => $simBack), 20, $jar);
+$o3 = PayGateway::getOrder($simOrderNo);
+check('模擬面板：偽造 TradeSha 被拒且狀態不變', $o3['status'] === 'DISPATCHED', $o3['status']);
+
+Http::postForm($base . '/pay_simulate.php', array('act' => 'amtmismatch', 'ono' => $simOrderNo, 'back' => $simBack), 20, $jar);
+$o3 = PayGateway::getOrder($simOrderNo);
+check('模擬面板：金額不符被拒且狀態不變', $o3['status'] === 'DISPATCHED', $o3['status']);
+
+// 情境：ATM 取號
+Http::postForm($base . '/pay_simulate.php', array('act' => 'vac', 'ono' => $simOrderNo, 'back' => $simBack), 20, $jar);
+$o3 = PayGateway::getOrder($simOrderNo);
+check('模擬面板：ATM 取號寫入虛擬帳號', $o3['virtual_account'] !== '' && $o3['status'] === 'VACC_ISSUED',
+    $o3['virtual_account'] . '/' . $o3['status']);
+
+// 情境：回呼失敗演練（來源站台連線失敗）
+$cbBefore = count(PayGateway::callbacks($simOrderNo));
+$oBefore = PayGateway::getOrder($simOrderNo);
+Http::postForm($base . '/pay_simulate.php', array('act' => 'cbfail', 'ono' => $simOrderNo, 'back' => $simBack), 40, $jar);
+$o3 = PayGateway::getOrder($simOrderNo);
+check('模擬面板：回呼失敗演練後回呼狀態 FAILED', $o3['callback_state'] === 'FAILED', $o3['callback_state']);
+check('模擬面板：回呼失敗有逐次嘗試紀錄（3 次）', count(PayGateway::callbacks($simOrderNo)) >= $cbBefore + 3,
+    ($cbBefore) . ' → ' . count(PayGateway::callbacks($simOrderNo)));
+check('模擬面板：失敗後回呼網址已還原', $o3['callback_url'] === $oBefore['callback_url'], $o3['callback_url']);
+
+// 情境：付款成功後狀態與回呼
+Http::postForm($base . '/pay_simulate.php', array('act' => 'paid', 'ono' => $simOrderNo, 'back' => $simBack), 25, $jar);
+$o3 = PayGateway::getOrder($simOrderNo);
+check('模擬面板：付款成功演練後狀態 PAID', $o3['status'] === 'PAID', $o3['status']);
+check('模擬面板：付款成功後回呼成功 SENT', $o3['callback_state'] === 'SENT', $o3['callback_state']);
+
+// 情境：重複通知不重複回呼
+$cbBefore = count(PayGateway::callbacks($simOrderNo));
+Http::postForm($base . '/pay_simulate.php', array('act' => 'duplicate', 'ono' => $simOrderNo, 'back' => $simBack), 25, $jar);
+check('模擬面板：重複通知不增加回呼紀錄', count(PayGateway::callbacks($simOrderNo)) === $cbBefore,
+    $cbBefore . ' → ' . count(PayGateway::callbacks($simOrderNo)));
+
+// 情境：回應非 OK（需要 demo/callback_receiver.php）
+$receiver = $base . '/demo/callback_receiver.php';
+if (strpos(@file_get_contents($receiver), 'FAIL: sign error') !== false) {
+    Http::postForm($base . '/pay_simulate.php', array('act' => 'reset', 'ono' => $simOrderNo, 'back' => $simBack), 20, $jar);
+    Http::postForm($base . '/pay_simulate.php', array('act' => 'cbnoack', 'ono' => $simOrderNo, 'back' => $simBack), 40, $jar);
+    $o3 = PayGateway::getOrder($simOrderNo);
+    check('模擬面板：來源站台回應非 OK 判為 FAILED', $o3['callback_state'] === 'FAILED', $o3['callback_state']);
+    $last = PayGateway::callbacks($simOrderNo);
+    $tail = count($last) - 1;
+    check('模擬面板：非 OK 的嘗試有記錄錯誤原因',
+        $last[$tail]['is_success'] == 0 && $last[$tail]['error'] !== '', $last[$tail]['error']);
+} else {
+    echo "  [SKIP] 本機沒有 demo/callback_receiver.php，跳過「回應非 OK」演練\n";
+}
+
+// 交易明細頁要有模擬面板入口
+$pageWithSim = Http::postForm($base . '/pay_query.php?ono=' . $simOrderNo, array(), 15, $jar);
+check('交易明細頁提供模擬面板入口', strpos($pageWithSim['body'], 'pay_simulate.php') !== false, '');
+
 @unlink($jar);
 
 echo "\n結果：{$pass} 通過 / {$fail} 失敗\n";

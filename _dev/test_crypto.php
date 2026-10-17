@@ -132,5 +132,21 @@ if (function_exists('mcrypt_encrypt')) {
     echo "  [SKIP] 本機未安裝 mcrypt（本機為 PHP 8.x，PHP 5.2 才需要）\n";
 }
 
+echo "-- 舊版 mysql_* 驅動靜態檢查（PHP 5.2 才會走這條路，參數順序錯不會被發現） --\n";
+$db = file_get_contents(dirname(__FILE__) . '/../includes/DB.php');
+check('mysql_query 為 (查詢字串, 連線)',
+    preg_match('/mysql_query\(\s*\'SET NAMES[^;]*,\s*\$c\s*\)/', $db) === 1
+    && preg_match('/mysql_query\(\$sql,\s*self::\$conn\)/', $db) === 1, '');
+check('mysql_query 沒有把連線寫在第一個參數',
+    !preg_match('/mysql_query\(\s*(self::\$conn|\$c)\s*,/', $db), '');
+check('mysql_real_escape_string 為 (字串, 連線)',
+    preg_match('/mysql_real_escape_string\(\$value,\s*self::\$conn\)/', $db) === 1, '');
+check('mysql_real_escape_string 沒有把連線寫在第一個參數',
+    !preg_match('/mysql_real_escape_string\(\s*self::\$conn\s*,/', $db), '');
+check('mysql_select_db 為 (資料庫, 連線)',
+    preg_match('/mysql_select_db\(DB_NAME,\s*\$c\)/', $db) === 1, '');
+check('mysql_connect 以 host:port 帶埠',
+    preg_match('/mysql_connect\(DB_HOST\s*\.\s*\':\'\s*\.\s*DB_PORT/', $db) === 1, '');
+
 echo "\n結果：{$pass} 通過 / {$fail} 失敗\n";
 exit($fail === 0 ? 0 : 1);

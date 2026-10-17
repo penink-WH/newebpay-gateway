@@ -61,6 +61,11 @@ if ($ono !== '') {
         . '<a class="btn ghost sm" href="' . nw_e($back . '&back=' . rawurlencode($back) . '&act=recallback') . '">重送回呼來源站台</a> ';
     echo '<a class="btn ghost sm" href="pay_result.php?ono=' . urlencode($order['order_no']) . '">消費者結果頁</a>';
     echo '<a class="btn ghost sm" href="pay_query.php">回列表</a></p>';
+    if (NEWEB_ENV === 'test') {
+        echo '<div class="notice"><b>測試環境</b>：可用模擬面板自己產生各種回呼狀態（成功／失敗／取消／取號／重複通知／偽造／金額不符／回呼失敗演練），'
+            . '驗證回呼是否有成功送出。<a href="pay_simulate.php?ono=' . urlencode($order['order_no'])
+            . '&back=' . rawurlencode('pay_query.php?ono=' . $order['order_no']) . '">開啟模擬面板 →</a></div>';
+    }
 
     echo '<h2>訂單資料</h2><table>';
     $rows = array(

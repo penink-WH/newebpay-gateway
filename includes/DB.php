@@ -28,7 +28,7 @@ class DB
             if (!$c) {
                 die('DB connect failed');
             }
-            mysql_query($c, 'SET NAMES ' . $charset);
+            mysql_query('SET NAMES ' . $charset, $c);   // 注意：mysql_query 的參數順序是 (查詢字串, 連線)
             mysql_select_db(DB_NAME, $c);
             self::$conn = $c;
             self::$driver = 'mysql';
@@ -69,7 +69,8 @@ class DB
             return '';
         }
         if (self::$driver === 'mysql') {
-            return mysql_real_escape_string(self::$conn, $value);
+            // 注意：mysql_real_escape_string 的參數順序是 (字串, 連線)
+            return mysql_real_escape_string($value, self::$conn);
         }
         if (self::$driver === 'mysqli') {
             return mysqli_real_escape_string(self::$conn, $value);
@@ -83,7 +84,7 @@ class DB
     {
         self::init();
         if (self::$driver === 'mysql') {
-            $r = mysql_query(self::$conn, $sql);
+            $r = mysql_query($sql, self::$conn);
             if ($r === false) {
                 throw new Exception('SQL error: ' . mysql_error(self::$conn) . ' | ' . $sql);
             }
