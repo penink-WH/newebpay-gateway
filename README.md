@@ -46,7 +46,63 @@
 
 ---
 
-## 三、安裝
+## 三、Windows 一鍵自動部署
+
+`deploy/windows-deploy.ps1` 會把整件事做完：檢查環境 → 佈置檔案 → 產生設定檔（放在網站根目錄之外）→
+建立資料庫與資料表 → 建立來源站台 → 自我檢查 → 輸出部署報告。
+
+**雙擊執行（最簡單）**
+
+```
+deploy\windows-deploy.cmd
+```
+（`.cmd` 會先把主控台切成 UTF-8，逐項詢問參數；中文不會顯示成亂碼）
+
+**命令列執行**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\windows-deploy.ps1 `
+    -DbPass 'Db#12345' -DbRootPass 'root密碼' `
+    -MerchantId 'MS12345678' `
+    -HashKey '32碼金鑰' -HashIv '16碼金鑰' `
+    -BaseUrl 'https://pay.example.com.tw/gateway/' `
+    -AdminPassword '後台密碼' `
+    -SourceCode 'shop' -SourceName '公司購物網' `
+    -SourceAllowIps '203.0.113.10,198.51.100.0/24' -RunE2E
+```
+
+常用參數：
+
+| 參數 | 說明 |
+|---|---|
+| `-WebRoot` | 網站根目錄（預設 `C:\inetpub\wwwroot\newebpay-gateway`） |
+| `-ConfigDir` | 設定檔目錄（預設 `C:\inetpub\newebpay-conf`，**刻意放在網站之外**） |
+| `-DbHost/-DbPort/-DbName/-DbUser/-DbPass` | 資料庫連線資訊 |
+| `-DbRootUser/-DbRootPass`、`-MysqlExe` | 建立資料庫用的管理員帳號與 mysql.exe 路徑 |
+| `-NewebEnv` | `test` / `live` |
+| `-MerchantId/-HashKey/-HashIv/-BaseUrl/-AdminPassword` | 藍新商店參數與後台密碼 |
+| `-SourceCode/-SourceName/-SourceSecret` | 首個子公司站台；不給 secret 會自動產生 32 碼金鑰 |
+| `-SourceCallbackUrl/-SourceResultUrl/-SourceAllowIps/-SourceAllowOrigins` | 該站台的 NOTIFY／RESULT 與白名單 |
+| `-RunE2E` | 額外跑 91 項端對端測試（Windows 的內建伺服器單一執行緒會自動略過並提示改用 IIS 手動驗收） |
+| `-SkipDb`、`-DryRun`、`-Interactive` | 跳過資料庫／只演練不實作／互動填參數 |
+
+腳本做的事（安全相關）：
+
+- **設定檔不放在網站根目錄**：`config.php` 寫到 `-ConfigDir`，網站根目錄只留 `_config_path.php` 指向它，
+  並確認設定檔**沒有 BOM**（有 BOM 會讓 PHP 在輸出前吐字元，破壞 HTTP 標頭）。
+- 自動寫入 `web.config`：隱藏 `includes/`、禁止下載 `.sql`/`.log`/`.md`、`Cache-Control: no-store`、
+  `X-Content-Type-Options: nosniff`。
+- 自動排除 `_dev/`、`demo/`、`sql/`、`deploy/`、`install.php`、`config.php`（舊部署殘留也會清掉）。
+- **可重複執行**：不清空既有資料庫與資料表；`install.php` 會自動補上舊版缺少的欄位，
+  且不再覆蓋既有測試站台的設定。
+- 自我檢查後會把暫存的測試檔清乾淨，並還原測試站台設定。
+
+> Windows 的 PHP 內建伺服器是單一執行緒，跑不了「模擬藍新回呼自己」的流程，
+> 因此 `-RunE2E` 在 Windows 會自動略過並提示：部署到 IIS 後照第九節的清單手動點一次完整流程。
+
+---
+
+## 四、安裝
 
 1. 上傳所有檔案到網站目錄（需對外開放的只有 `pay_request.php`、`pay_notify.php`、`pay_result.php`）。
 2. 複製 `config.sample.php` → `config.php`，填入：
@@ -75,7 +131,7 @@
 
 ---
 
-## 四、來源端准入管制（兩階段）
+## 五、來源端准入管制（兩階段）
 
 收到轉送的 POST 時，依序做兩階段檢查，**任一階段不通過一律回 `HTTP 403`**，
 並寫入 `pay_logs`（`stage=ACCESS`）留下拒絕原因與來源特徵：
@@ -113,7 +169,7 @@
 
 ---
 
-## 五、來源站台如何轉送付款需求
+## 六、來源站台如何轉送付款需求
 
 `POST` 打到 `https://你的網域/pay_request.php`（form 或 query string 皆可）：
 
@@ -161,7 +217,7 @@ $fields['sign'] = strtoupper(hash_hmac('sha256', implode('&', $parts), $shopSecr
 
 ---
 
-## 六、回呼來源站台（金流 → 來源站台）
+## 七、回呼來源站台（金流 → 來源站台）
 
 結果確認後，本系統會 `POST`（`application/x-www-form-urlencoded`）到 `callback_url`：
 
@@ -184,7 +240,7 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 七、藍新加解密實作要點
+## 八、藍新加解密實作要點
 
 `includes/NewebPayCrypto.php`，與藍新官方外掛一致：
 
@@ -200,12 +256,12 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 
 ---
 
-## 八、測試
+## 九、測試
 
 ### 一鍵測試（推薦給非工程人員）
 
 ```bash
-bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 101 項測試 → 印出網址
+bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 105 項測試 → 印出網址
 bash _dev/run_tests.sh stop   # 關掉測試服務
 ```
 
@@ -222,11 +278,14 @@ bash _dev/run_tests.sh stop   # 關掉測試服務
 | `http://127.0.0.1:8811/demo/callback_receiver.php` | 看來源站台實際收到的回呼 |
 | `http://127.0.0.1:8811/_dev/mock_newebpay_gateway.php` | 模擬藍新（可測刷卡成功／失敗／ATM 取號） |
 
+> 全部輸出為 UTF-8；若你的終端機不是 UTF-8，`run_tests.sh` 會自動設 `LANG=en_US.UTF-8`。
+> Windows 上的部署腳本同樣會把主控台切成 UTF-8（`chcp 65001`）並以 UTF-8 寫報告檔。
+
 ### 個別測試
 
 ```bash
 php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證（14 項）
-php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼（含防偽，共 87 項）
+php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼（含防偽，共 91 項）
 ```
 
 > `test_e2e.php` 會在資料庫建立測試訂單、並實際送出回呼給 `demo` 站台，
@@ -251,7 +310,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 
 ---
 
-## 九、安全注意事項與上線檢查
+## 十、安全注意事項與上線檢查
 
 - [ ] `config.php` 加入金鑰與資料庫密碼後**不可從網站下載**（已附 `.htaccess`；nginx 請自行設 deny 規則）。
 - [ ] 安裝後刪除 `install.php`、`_dev/`、`demo/`、`sql/`。
@@ -266,7 +325,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 - [ ] 日誌中的卡號/token 欄位已遮蔽（`maskPost`），但仍建議設定 `LOG_RAW_POST = 0` 減少敏感資料落地。
 ---
 
-## 十、授權與安全聲明
+## 十一、授權與安全聲明
 
 - 程式碼以 **MIT** 授權釋出（見 `LICENSE`），可自由修改再用於商業專案。
 - **金流實作務必自行審查後再上線**：本專案提供了簽章驗證、金額核對、重放防護與回呼記錄，

@@ -772,12 +772,15 @@ class PayGateway
             }
         }
 
-        self::updateOrder($orderNo, array(
+        $upd = array(
             'callback_state' => $success ? 'SENT' : 'FAILED',
             'callback_tries' => (int)$order['callback_tries'] + $i,
-            'callback_at' => $success ? nw_now() : ($order['callback_at'] === null ? '' : $order['callback_at']),
             'cb_sent_status' => $success ? $order['status'] : $lastSent,
-        ));
+        );
+        if ($success) {
+            $upd['callback_at'] = nw_now();   // 失敗時不要動這欄（DATETIME 不接受空字串）
+        }
+        self::updateOrder($orderNo, $upd);
 
         self::log($orderNo, 'CALLBACK', $success ? 'SENT' : 'FAILED', $success ? 'OK' : 'FAIL',
             $reason . '：回呼 ' . $url . ($success ? ' 成功' : ' 失敗（已嘗試 ' . $i . ' 次）'),

@@ -86,8 +86,14 @@ $demo = array(
     'created_at' => nw_now(),
     'updated_at' => nw_now(),
 );
-DB::upsert('pay_sources', $demo, array('source_name', 'callback_url', 'result_url', 'secret', 'allow_ips', 'allow_origins', 'allow_hosts', 'is_active', 'remark', 'updated_at'));
-$out[] = '測試來源站台 demo（secret=' . $demoSecret . '，callback=' . $demo['callback_url'] . '）';
+$demoExists = DB::queryRow("SELECT * FROM `pay_sources` WHERE `source_code` = 'demo' LIMIT 1");
+if ($demoExists) {
+    // 已存在就不動它：回呼網址、白名單等設定應該由管理頁維護，不該被安裝程式蓋掉
+    $out[] = '測試來源站台 demo 已存在，略過（設定請用 pay_sources_admin.php 維護）';
+} else {
+    DB::insert('pay_sources', $demo);
+    $out[] = '建立測試來源站台 demo（secret=' . $demoSecret . '，callback=' . $demo['callback_url'] . '）';
+}
 
 // 補幾筆測試資料（已有資料則跳過）
 $has = (int)DB::queryValue("SELECT COUNT(*) FROM `pay_orders` WHERE `source_code` = 'demo'", 0);

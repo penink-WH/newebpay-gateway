@@ -74,6 +74,7 @@ if ($act === 'mpg') {
 
 // ---------------------------------------------------------------- 模擬付款完成 / 取號
 if ($act === 'settle') {
+    $format = nw_req('format', 'html');
     $ono = nw_req('ono');
     $step = nw_req('step', 'paid');
     $mode = nw_req('mode', 'credit');
@@ -91,10 +92,11 @@ if ($act === 'settle') {
     $return = nw_base('pay_notify.php?src=return');
     $customer = nw_base('pay_notify.php?src=customer');
 
+    // 1) 取號結果欄位（step=vacc / vacc_paid）
+    $customerFields = null;
     if ($step === 'vacc' || $step === 'vacc_paid') {
-        // 取號結果（藍新以明文 POST 通知 CustomerURL）
-        $f = array(
-            'MerchantID' => NEWEB_HASH_KEY === '' ? '' : NEWEB_MERCHANT_ID,
+        $customerFields = array(
+            'MerchantID' => NEWEB_MERCHANT_ID,
             'MerchantOrderNo' => $ono,
             'TradeNo' => $tradeNo,
             'PayBankCode' => '004',
@@ -104,27 +106,9 @@ if ($act === 'settle') {
             'PayAmount' => $amt,
             'ExpireDate' => date('Ymd', strtotime('+7 day')),
         );
-        $r = Http::postForm($customer, $f, 10);
-        $done[] = "CustomerURL（取號結果）→ HTTP {$r['code']} {$r['body']}";
-        if ($step === 'vacc') {
-            // 只取號，消費者尚未轉帳：藍新頁面停留在ATM帳號畫面
-            nw_page_head('ATM 虛擬帳號（模擬）', '訂單 ' . $ono);
-            echo '<div class="vacc">ATM 虛擬帳號：' . nw_e($f['PayAccount']) . '</div>';
-            echo '<p>' . nw_e($f['PayBankName'] . ' ' . $f['PayBranchName'] . '（' . $f['PayBankCode'] . '）')
-                . '，金額 NT$' . number_format($f['PayAmount']) . '，繳費期限 ' . nw_e($f['ExpireDate']) . '</p>';
-            echo '<form method="get"><input type="hidden" name="act" value="settle">'
-                . '<input type="hidden" name="ono" value="' . nw_e($ono) . '">'
-                . '<input type="hidden" name="step" value="vacc_paid">'
-                . '<input type="hidden" name="mode" value="vacc">'
-                . '<input type="hidden" name="amt" value="' . nw_e($f['PayAmount']) . '">'
-                . '<button class="btn" type="submit">消費者已完成 ATM 轉帳</button></form>';
-            echo '<p><a class="btn ghost" href="' . nw_e(nw_base('pay_result.php') . '?ono=' . urlencode($ono)) . '">查看付款結果頁</a></p>';
-            nw_page_foot();
-            exit;
-        }
     }
 
-    // 付款結果（加密 POST 到 NotifyURL 與 ReturnURL）
+    // 2) 付款結果欄位（加密）
     $isFail = ($step === 'fail');
     $result = array(
         'Status' => $isFail ? 'MPG03009' : 'SUCCESS',
@@ -147,6 +131,42 @@ if ($act === 'settle') {
         'TradeSha' => $sha,
         'Version' => NEWEB_VERSION,
     );
+
+    // format=json：只回傳欄位讓呼叫端自己送出（內建伺服器單一執行緒時不會自我阻塞）
+    if ($format === 'json') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo nw_json_encode(array(
+            'customer' => $customerFields,
+            'notify' => $fields,
+            'return' => $fields,
+            'notify_url' => $notify,
+            'return_url' => $return,
+            'customer_url' => $customer,
+        ));
+        exit;
+    }
+
+    // 一般模式：真的送出（供瀏覽器手動演練用）
+    if ($customerFields !== null) {
+        $r = Http::postForm($customer, $customerFields, 10);
+        $done[] = "CustomerURL（取號結果）→ HTTP {$r['code']} {$r['body']}";
+        if ($step === 'vacc') {
+            nw_page_head('ATM 虛擬帳號（模擬）', '訂單 ' . $ono);
+            echo '<div class="vacc">ATM 虛擬帳號：' . nw_e($customerFields['PayAccount']) . '</div>';
+            echo '<p>' . nw_e($customerFields['PayBankName'] . ' ' . $customerFields['PayBranchName']
+                . '（' . $customerFields['PayBankCode'] . '）') . '，金額 NT$' . number_format($customerFields['PayAmount'])
+                . '，繳費期限 ' . nw_e($customerFields['ExpireDate']) . '</p>';
+            echo '<form method="get"><input type="hidden" name="act" value="settle">'
+                . '<input type="hidden" name="ono" value="' . nw_e($ono) . '">'
+                . '<input type="hidden" name="step" value="vacc_paid">'
+                . '<input type="hidden" name="mode" value="vacc">'
+                . '<input type="hidden" name="amt" value="' . nw_e($customerFields['PayAmount']) . '">'
+                . '<button class="btn" type="submit">消費者已完成 ATM 轉帳</button></form>';
+            echo '<p><a class="btn ghost" href="' . nw_e(nw_base('pay_result.php') . '?ono=' . urlencode($ono)) . '">查看付款結果頁</a></p>';
+            nw_page_foot();
+            exit;
+        }
+    }
 
     $r1 = Http::postForm($notify, $fields, 15);
     $done[] = "NotifyURL（幕後通知）→ HTTP {$r1['code']} " . nw_truncate($r1['body'], 60);

@@ -8,9 +8,27 @@ ini_set('display_errors', '1');
 date_default_timezone_set('Asia/Taipei');
 
 if (!defined('BASE_URL')) {
-    $__cfg = dirname(__FILE__) . '/../config.php';
+    // 設定檔位置（優先序）：NW_CONFIG_FILE 環境變數 > _config_path.php > 專案內的 config.php
+    // IIS/Windows 常見做法是把含金鑰的設定放在網站根目錄之外，用 _config_path.php 指向它；
+    // 環境變數優先，方便部署腳本做本機自我檢查時暫時換一份設定。
+    $__cfg = '';
+    if (($__env = getenv('NW_CONFIG_FILE')) !== false && $__env !== '') {
+        $__cfg = $__env;
+    }
+    if ($__cfg === '') {
+        $__cfgMap = dirname(__FILE__) . '/../_config_path.php';
+        if (file_exists($__cfgMap)) {
+            require_once($__cfgMap);
+        }
+    }
+    if ($__cfg === '' && defined('NW_CONFIG_FILE') && NW_CONFIG_FILE !== '') {
+        $__cfg = NW_CONFIG_FILE;
+    }
+    if ($__cfg === '') {
+        $__cfg = dirname(__FILE__) . '/../config.php';
+    }
     if (!file_exists($__cfg)) {
-        die('找不到 config.php，請由 config.sample.php 複製一份並填入參數');
+        die('找不到設定檔（' . $__cfg . '），請由 config.sample.php 複製一份並填入參數');
     }
     require_once($__cfg);
 }

@@ -17,7 +17,9 @@
 
 require_once(dirname(__FILE__) . '/../includes/common.php');
 
-$base = rtrim(BASE_URL, '/');
+// 測試目標網址：可用 NW_TEST_BASE_URL 覆寫（例如部署到新機器時的本機自我檢查）
+$__envBase = getenv('NW_TEST_BASE_URL');
+$base = ($__envBase !== false && $__envBase !== '') ? rtrim($__envBase, '/') : rtrim(BASE_URL, '/');
 $secret = 'DEMO-SECRET-123456';
 $pass = 0;
 $fail = 0;
@@ -56,6 +58,12 @@ function req($method, $url, $fields, $followRedirect)
     return $resp;
 }
 
+/** 跨平台的「空輸出目的地」：Windows 沒有 /dev/null */
+function curl_null_out()
+{
+    return (DIRECTORY_SEPARATOR === '\\') ? 'NUL' : '/dev/null';
+}
+
 /** POST 後取出狀態碼與 Location（PHP 的 HTTP 類別拿不到標頭，這裡借用 curl CLI） */
 function post_and_location($url, $fields)
 {
@@ -63,11 +71,57 @@ function post_and_location($url, $fields)
     foreach ($fields as $k => $v) {
         $parts[] = '--data-urlencode ' . escapeshellarg($k . '=' . $v);
     }
-    $cmd = 'curl -s -o /dev/null -w "%{http_code}|%{redirect_url}" -X POST ' . implode(' ', $parts) . ' ' . escapeshellarg($url);
+    $cmd = 'curl -s -o ' . curl_null_out() . ' -w "%{http_code}|%{redirect_url}" -X POST '
+        . implode(' ', $parts) . ' ' . escapeshellarg($url);
     $out = shell_exec($cmd);
     $out = trim((string)$out);
     $pos = strpos($out, '|');
     return array('code' => (int)substr($out, 0, $pos), 'location' => $pos === false ? '' : substr($out, $pos + 1));
+}
+
+/** 以指定 Origin/Referer 標頭 POST 一次，只看 HTTP 狀態碼 */
+function post_with_header($url, $payload, $header)
+{
+    if (!function_exists('shell_exec')) {
+        return -1;
+    }
+    $cmd = 'curl -s -o ' . curl_null_out() . ' -w "%{http_code}" -X POST -H ' . escapeshellarg($header)
+        . ' --data ' . escapeshellarg($payload) . ' ' . escapeshellarg($url);
+    return (int)trim((string)shell_exec($cmd));
+}
+
+
+/**
+ * 呼叫模擬藍新的 settle，取得「藍新要送出的欄位」，再由測試端自己送出。
+ * 這樣即使 PHP 內建伺服器是單一執行緒（Windows）也不會自我阻塞。
+ * @return array array('notify'=>fields,'return'=>fields,'customer'=>fields|null,'notify_url'=>,'return_url'=>)
+ */
+function mock_settle($base, $orderNo, $step, $mode, $amt)
+{
+    $resp = Http::postForm($base . '/_dev/mock_newebpay_gateway.php', array(
+        'act' => 'settle', 'format' => 'json', 'ono' => $orderNo,
+        'step' => $step, 'mode' => $mode, 'amt' => $amt,
+    ), 20);
+    $json = json_decode($resp['body'], true);
+    if (!is_array($json)) {
+        return array('error' => $resp['body']);
+    }
+    return $json;
+}
+
+/** 送出模擬藍新的取號結果（CustomerURL） */
+function send_customer($base, $customerFields)
+{
+    $resp = Http::postForm($base . '/pay_notify.php?src=customer', $customerFields, 20);
+    return $resp['body'];
+}
+
+/** 送出模擬藍新的付款結果（NotifyURL + ReturnURL） */
+function send_result($base, $payload)
+{
+    $n = Http::postForm($base . '/pay_notify.php?src=notify', $payload['notify'], 20);
+    $r = Http::postForm($base . '/pay_notify.php?src=return', $payload['return'], 20);
+    return array('notify' => $n['body'], 'return' => $r['code']);
 }
 
 /** 直接改 pay_sources 某站台設定欄位（測試用） */
@@ -190,11 +244,11 @@ $logFile = dirname(__FILE__) . '/../demo/callback_log.txt';
 clearstatcache();
 $before = file_exists($logFile) ? filesize($logFile) : 0;
 $logTail = '';
-$settle = Http::postForm($base . '/_dev/mock_newebpay_gateway.php?act=settle', array(
-    'ono' => $orderNo, 'step' => 'paid', 'mode' => 'credit', 'amt' => 660,
-), 25);
-check('模擬藍新回應 NotifyURL 成功', strpos($settle['body'], 'NotifyURL（幕後通知）→ HTTP 200 SUCCESS') !== false,
-    nw_truncate($settle['body'], 400));
+$settle = mock_settle($base, $orderNo, 'paid', 'credit', 660);
+check('模擬藍新產生付款結果欄位', isset($settle['notify']['TradeInfo']), nw_truncate(isset($settle['error']) ? $settle['error'] : '', 300));
+$sent = send_result($base, $settle);
+check('模擬藍新回應 NotifyURL 成功', strpos($sent['notify'], 'SUCCESS') === 0, $sent['notify']);
+check('模擬藍新回應 ReturnURL（302 導回結果頁）', $sent['return'] === 302, 'code=' . $sent['return']);
 
 $order = PayGateway::getOrder($orderNo);
 check('訂單狀態變成 PAID', $order['status'] === 'PAID', $order['status']);
@@ -217,9 +271,8 @@ check('pay_callbacks 記錄來源站台回應 OK', strpos($cbs[0]['response_body
 
 // 重複通知不重複回呼
 $cbCount = count(PayGateway::callbacks($orderNo));
-Http::postForm($base . '/_dev/mock_newebpay_gateway.php?act=settle', array(
-    'ono' => $orderNo, 'step' => 'paid', 'mode' => 'credit', 'amt' => 660,
-), 25);
+$dup = mock_settle($base, $orderNo, 'paid', 'credit', 660);
+send_result($base, $dup);
 check('重複通知不會重複回呼來源站台', count(PayGateway::callbacks($orderNo)) === $cbCount,
     $cbCount . ' → ' . count(PayGateway::callbacks($orderNo)));
 
@@ -246,9 +299,10 @@ check('ATM 訂單開啟 VACC', strpos($mpgAtm['body'], '>VACC<') !== false && st
 check('ATM 訂單帶 CustomerURL', strpos($mpgAtm['body'], 'pay_notify.php?src=customer') !== false, 'customer url');
 check('ATM 訂單帶 ExpireDate', strpos($mpgAtm['body'], 'name="ExpireDate"') !== false || strpos($mpgAtm['body'], 'ExpireDate') !== false, '');
 
-Http::postForm($base . '/_dev/mock_newebpay_gateway.php?act=settle', array(
-    'ono' => $orderAtm, 'step' => 'vacc', 'mode' => 'vacc', 'amt' => 3500,
-), 25);
+$vacc = mock_settle($base, $orderAtm, 'vacc', 'vacc', 3500);
+check('模擬藍新產生 ATM 虛擬帳號欄位', isset($vacc['customer']['PayAccount']), nw_truncate(isset($vacc['error']) ? $vacc['error'] : '', 300));
+$custResp = send_customer($base, $vacc['customer']);
+check('取號結果已送達 CustomerURL', $custResp === 'SUCCESS', $custResp);
 $order = PayGateway::getOrder($orderAtm);
 check('ATM 虛擬帳號已入庫', $order['virtual_account'] !== '', var_export($order['virtual_account'], true));
 check('ATM 銀行/分行已入庫', $order['bank_name'] === '臺灣銀行' && $order['branch_name'] === '臺北分行' && $order['bank_code'] === '004',
@@ -266,9 +320,8 @@ check('取號後尚未收到付款結果', strpos($res['body'], 'ATM 虛擬帳�
 
 // 消費者完成 ATM 轉帳 → 藍新回傳付款成功
 $cbBefore = count(PayGateway::callbacks($orderAtm));
-Http::postForm($base . '/_dev/mock_newebpay_gateway.php?act=settle', array(
-    'ono' => $orderAtm, 'step' => 'vacc_paid', 'mode' => 'vacc', 'amt' => 3500,
-), 25);
+$vaccPaid = mock_settle($base, $orderAtm, 'vacc_paid', 'vacc', 3500);
+send_result($base, $vaccPaid);
 $order = PayGateway::getOrder($orderAtm);
 check('ATM 轉帳後狀態 PAID', $order['status'] === 'PAID', $order['status']);
 check('ATM 轉帳後付款方式為 VACC', $order['payment_type'] === 'VACC', $order['payment_type']);
@@ -382,23 +435,17 @@ check('設定來源網站但請求未帶 Origin/Referer → 403', $r['code'] ===
 
 $originFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-ORIGIN'));
 $payload = http_build_query(array_merge($originFields, array('sign' => nw_sign('DEMO-SECRET-123456', $originFields, 'sign'))));
-$cmdOk = 'curl -s -o /dev/null -w "%{http_code}" -X POST -H ' . escapeshellarg('Origin: https://shop.example.com')
-    . ' --data ' . escapeshellarg($payload) . ' ' . escapeshellarg($base . '/pay_request.php');
-$codeOk = (int)trim((string)shell_exec($cmdOk));
+$codeOk = post_with_header($base . '/pay_request.php', $payload, 'Origin: https://shop.example.com');
 check('Origin 符合允許網站 → 通過（建立訂單）', $codeOk === 200, 'code=' . $codeOk);
 
 $badFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-EVIL'));
 $payloadBad = http_build_query(array_merge($badFields, array('sign' => nw_sign('DEMO-SECRET-123456', $badFields, 'sign'))));
-$cmdBad = 'curl -s -o /dev/null -w "%{http_code}" -X POST -H ' . escapeshellarg('Origin: https://evil.example.org')
-    . ' --data ' . escapeshellarg($payloadBad) . ' ' . escapeshellarg($base . '/pay_request.php');
-$codeBad = (int)trim((string)shell_exec($cmdBad));
+$codeBad = post_with_header($base . '/pay_request.php', $payloadBad, 'Origin: https://evil.example.org');
 check('Origin 不在允許網站 → 403', $codeBad === 403, 'code=' . $codeBad);
 
 $refFields = array_merge($okFields, array('source_order_no' => 'GATE-' . $stamp . '-REFERER'));
 $payloadRef = http_build_query(array_merge($refFields, array('sign' => nw_sign('DEMO-SECRET-123456', $refFields, 'sign'))));
-$cmdRef = 'curl -s -o /dev/null -w "%{http_code}" -X POST -H ' . escapeshellarg('Referer: https://shop.example.com/cart?id=1')
-    . ' --data ' . escapeshellarg($payloadRef) . ' ' . escapeshellarg($base . '/pay_request.php');
-$codeRef = (int)trim((string)shell_exec($cmdRef));
+$codeRef = post_with_header($base . '/pay_request.php', $payloadRef, 'Referer: https://shop.example.com/cart?id=1');
 check('Referer 符合允許網站 → 通過（無 Origin 時以 Referer 判斷）', $codeRef === 200, 'code=' . $codeRef);
 reset_demo_source();
 

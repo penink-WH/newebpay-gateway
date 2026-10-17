@@ -12,15 +12,22 @@
 #   4. 執行加解密標準向量測試 + 端對端流程測試
 set -u
 
+# 輸出一律 UTF-8（避免在非 UTF-8 終端機看到亂碼）
+if [ -z "${LANG:-}" ] || [ "${LANG}" = "C" ]; then
+  export LANG=en_US.UTF-8
+  export LC_ALL=en_US.UTF-8
+  if locale -a 2>/dev/null | grep -qi "en_US.utf8\|en_US.UTF-8"; then :; fi
+fi
+
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=8811
 DATA=/tmp/nwmysql/data
 SOCK=/tmp/nwmysql/run/my.sock
 
 # config.php 裡的資料庫埠（沒設定就用 13306）
-DB_PORT=$(grep -E "^define\('DB_PORT'" "$DIR/config.php" 2>/dev/null | grep -oE "[0-9]+" | head -1)
+DB_PORT=$(sed -nE "s/.*'DB_PORT',[[:space:]]*([0-9]+).*/\1/p" "$DIR/config.php" 2>/dev/null | head -1)
 DB_PORT="${DB_PORT:-13306}"
-DB_NAME=$(grep -E "^define\('DB_NAME'" "$DIR/config.php" 2>/dev/null | grep -oE "'[^']+'" | tr -d "'")
+DB_NAME=$(sed -nE "s/.*'DB_NAME',[[:space:]]*'([^']+)'.*/\1/p" "$DIR/config.php" 2>/dev/null | head -1)
 DB_NAME="${DB_NAME:-newebpay_gateway}"
 
 MYSQL_BIN="$(command -v mariadb || command -v mysql)"
@@ -77,10 +84,10 @@ if ! curl -s -o /dev/null "http://127.0.0.1:$PORT/pay_request.php"; then
 fi
 echo "✔ PHP 測試伺服器就緒（http://127.0.0.1:${PORT}）"
 
-# 4. 測試
+# 4. 測試（強制 UTF-8 輸出）
 echo
 echo "══════ 1/2 加解密標準向量 ══════"
-(cd "$DIR" && php _dev/test_crypto.php); CRYPTO=$?
+(cd "$DIR" && PHP_CLI_UTF8=1 php _dev/test_crypto.php); CRYPTO=$?
 
 echo
 echo "══════ 2/2 端對端流程測試 ══════"
