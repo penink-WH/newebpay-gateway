@@ -15,13 +15,13 @@ function nw_page_head($title, $sub)
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--line:#e3e6ec;--txt:#22262e;--mut:#6b7280;--pri:#1a56db;--ok:#0a7c3f;--bad:#b42318;--warn:#a15c07}
 *{box-sizing:border-box}
-body{margin:0;padding:24px 12px;background:var(--bg);color:var(--txt);font:15px/1.65 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif}
-.wrap{max-width:880px;margin:0 auto}
+body{margin:0;padding:24px 12px;background:var(--bg);color:var(--txt);font:15px/1.65 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;overflow-x:hidden}
+.wrap{max-width:960px;margin:0 auto;overflow-x:hidden}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-bottom:16px}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 12px}
 .sub{color:var(--mut);font-size:13px;margin-bottom:18px}
 table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;word-break:break-word;overflow-wrap:anywhere}
 th{background:#fafbfc;color:var(--mut);font-weight:600;white-space:nowrap}
 td.k{color:var(--mut);white-space:nowrap;width:150px}
 .amount{font-size:30px;font-weight:700;letter-spacing:.5px}
@@ -33,10 +33,14 @@ td.k{color:var(--mut);white-space:nowrap;width:150px}
 .notice{border-left:3px solid var(--pri);background:#f6f9ff;padding:10px 14px;margin:12px 0;font-size:14px}
 .vacc{font-size:26px;font-weight:700;letter-spacing:3px;background:#f6f9ff;border:1px dashed var(--pri);padding:12px 16px;border-radius:8px;margin:10px 0}
 .muted{color:var(--mut);font-size:13px}
-pre{background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:6px;overflow:auto;font-size:12px;max-height:260px}
+pre{background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:12px;max-height:300px;
+    white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;max-width:100%;overflow-x:auto;line-height:1.55}
 .timeline{border-left:2px solid var(--line);margin-left:8px;padding-left:14px}
-.timeline div{margin-bottom:10px;font-size:13px}
-code{background:#f1f3f6;padding:1px 5px;border-radius:4px;font-size:13px}
+.timeline div{margin-bottom:10px;font-size:13px;word-break:break-word;overflow-wrap:anywhere}
+.timeline div>code,.timeline div>a{overflow-wrap:anywhere}
+.badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);background:#fafbfc}
+.logsum{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:10px 0;font-size:14px}
+code{background:#f1f3f6;padding:1px 5px;border-radius:4px;font-size:13px;word-break:break-all;overflow-wrap:anywhere}
 </style>
 </head>
 <body><div class="wrap">
