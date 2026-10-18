@@ -301,7 +301,7 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 ### 一鍵測試（推薦給非工程人員）
 
 ```bash
-bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 138 項測試 → 印出網址
+bash _dev/run_tests.sh        # 自動起服務 → 補資料表 → 跑完 146 項測試 → 印出網址
 bash _dev/run_tests.sh stop   # 關掉測試服務
 ```
 
@@ -324,7 +324,7 @@ bash _dev/run_tests.sh stop   # 關掉測試服務
 ### 個別測試
 
 ```bash
-php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證 + 舊版 mysql_* 靜態檢查（20 項）
+php _dev/test_crypto.php    # 加解密標準向量 + 公式驗證 + mysql_* 靜態檢查 + 上線防呆檢查（28 項）
 php _dev/test_e2e.php       # 端對端：轉送→准入管制→確認→藍新→結果→回呼＋模擬面板＋金額防呆（共 118 項）
 ```
 
@@ -350,7 +350,30 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 
 ---
 
-## 十二、安全注意事項與上線檢查
+## 十二、上線防呆（live 模式會擋）
+
+把「記得改設定」變成「沒改就起不來」。`NEWEB_ENV = live` 時，每個頁面載入都會檢查，
+**只要有任何 `block` 級項目未完成，整個系統拒絕服務**（`pay_notify.php` 回 503，
+避免付款結果被靜默丟掉）。
+
+| 會被擋的項目 | 為什麼 |
+|---|---|
+| `NEWEB_GATEWAY_URL` / `NEWEB_QUERY_URL` 仍有設定 | **會把正式收款的 POST 打到 `_dev` 模擬閘道**，線上等於收不到錢（最容易出事的一項） |
+| `NEWEB_ENV` 不是 `live` | 測試環境不會真的扣款 |
+| MerchantID / HashKey / HashIV 是藍新手冊的公開範例值 | 公開文件裡的值，必須換成自己商店的 |
+| HashKey ≠ 32 碼、HashIV ≠ 16 碼 | 長度不對，加解密會失敗 |
+| `ADMIN_PASSWORD` 為空或是弱值 | 訂單、ATM 虛擬帳號、消費者信箱都在後台看得到 |
+| `BASE_URL` 不是 HTTPS 或是 127.0.0.1／內網位址 | **藍新伺服器在別的機器上會打不進來，付款結果永遠收不到** |
+| `ALLOW_HTTP = 1` | 回呼走明文 |
+| 來源站台沒設簽章金鑰 | 等於完全不驗簽 |
+
+另外 `pay_sources_admin.php` 有一鍵 **「換金鑰」**：產生 32 碼新金鑰並記錄一筆
+`SOURCE_REGEN_SECRET` 稽核軌跡（給 `demo` 這種示範站台換金鑰用；換完要私下給該站台，
+舊金鑰立即失效）。「上線前必辦」清單也會直接列在站台設定頁，不必另外查。
+
+---
+
+## 十三、安全注意事項與上線檢查
 
 - [ ] `config.php` 加入金鑰與資料庫密碼後**不可從網站下載**（已附 `.htaccess`；nginx 請自行設 deny 規則）。
 - [ ] 安裝後刪除 `install.php`、`_dev/`、`demo/`、`sql/`。
@@ -367,11 +390,12 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 - [ ] 日誌中的卡號/token 欄位已遮蔽（`maskPost`），但仍建議設定 `LOG_RAW_POST = 0` 減少敏感資料落地。
 ---
 
-## 十三、授權與安全聲明
+## 十四、授權與安全聲明
 
 - 程式碼以 **MIT** 授權釋出（見 `LICENSE`），可自由修改再用於商業專案。
 - **金流實作務必自行審查後再上線**：本專案提供了簽章驗證、金額核對、重放防護與回呼記錄，
-  但金流系統的風險由部署者自行承擔。請至少完成〈安全注意事項與上線檢查〉的清單。
+  但金流系統的風險由部署者自行承擔。請至少完成〈安全注意事項與上線檢查〉的清單；
+  live 模式另有強制檢查，見〈上線防呆〉。
 - `config.php` 不在版控內，請以 `config.sample.php` 建立並填入**自己商店**的
   MerchantID / HashKey / HashIV 與資料庫密碼。
 - 開源版 `config.sample.php` 中的金鑰為藍新技術手冊的公開範例值，

@@ -148,5 +148,32 @@ check('mysql_select_db 為 (資料庫, 連線)',
 check('mysql_connect 以 host:port 帶埠',
     preg_match('/mysql_connect\(DB_HOST\s*\.\s*\':\'\s*\.\s*DB_PORT/', $db) === 1, '');
 
+echo "-- 上線防呆（GoLiveGuard）檢查 --\n";
+$gi = GoLiveGuard::issues();
+$labels = array();
+foreach ($gi as $i) {
+    $labels[$i['item']] = $i['level'];
+}
+check('未設定 live 環境時會被擋（現在是 test）',
+    isset($labels['環境仍是測試']) && $labels['環境仍是測試'] === 'block', implode(',', array_keys($labels)));
+check('模擬閘道殘留會被擋',
+    isset($labels['模擬閘道設定殘留']) && $labels['模擬閘道設定殘留'] === 'block', '未偵測到模擬閘道設定殌留');
+check('後台密碼是弱值會被擋',
+    isset($labels['後台密碼是弱值']) && $labels['後台密碼是弱值'] === 'block', '未偵測到弱密碼');
+check('BASE_URL 為本機位址會被擋',
+    isset($labels['BASE_URL 是本機或內網位址']), '本機 BASE_URL 未被標示');
+check('公開示範金鑰會被列入待處理',
+    count($gi) >= 3, count($gi) . ' 項');
+check('blocked() 判定為 true（live 未完成）', GoLiveGuard::blocked() === true, '');
+
+// 直接驗證規則表本身
+$probe = new ReflectionClass('GoLiveGuard');
+$pub = $probe->getStaticPropertyValue('publicKeys');
+check('規則表含藍新手冊的公開範例值',
+    in_array('Fs5cX1TGqYM2PpdbE14a9H83YQSQF5jn', $pub, true)
+    && in_array('C6AcmfqJILwgnhIP', $pub, true) && in_array('MS127874575', $pub, true), '');
+$weak = $probe->getStaticPropertyValue('weakPasswords');
+check('弱密碼清單含 demo-admin-2026', in_array('demo-admin-2026', $weak, true), '');
+
 echo "\n結果：{$pass} 通過 / {$fail} 失敗\n";
 exit($fail === 0 ? 0 : 1);

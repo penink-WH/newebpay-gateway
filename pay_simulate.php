@@ -13,6 +13,7 @@
  */
 
 require_once(dirname(__FILE__) . '/includes/common.php');
+nw_go_live_guard();
 require_once(dirname(__FILE__) . '/includes/layout.php');
 
 nw_require_admin();

@@ -11,6 +11,7 @@
  */
 
 require_once(dirname(__FILE__) . '/includes/common.php');
+nw_go_live_guard();
 require_once(dirname(__FILE__) . '/includes/layout.php');
 
 nw_require_admin();
@@ -100,6 +101,20 @@ if ($act === 'save') {
 }
 
 // ---------------------------------------------------------------- 停用 / 刪除
+if ($act === 'regen') {
+    $code = nw_req('code');
+    $chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+    $newSecret = '';
+    for ($i = 0; $i < 32; $i++) {
+        $newSecret .= $chars[mt_rand(0, strlen($chars) - 1)];
+    }
+    DB::update('pay_sources', array('secret' => $newSecret, 'updated_at' => nw_now()), array('source_code' => $code));
+    PayGateway::log('', 'SYSTEM', 'SOURCE_REGEN_SECRET', 'WARN',
+        '重新產生來源站台簽章金鑰：' . $code . '（新金鑰請私下給該站台，舊金鑰立即失效）', null, $ip);
+    nw_redirect('pay_sources_admin.php?edit=' . urlencode($code) . '&msg='
+        . urlencode('已為 ' . $code . ' 產生新金鑰，請私下給該站台並更新它的設定'));
+}
+
 if ($act === 'toggle' || $act === 'delete') {
     $code = nw_req('code');
     $exist = DB::queryRow("SELECT * FROM `pay_sources` WHERE `source_code` = '" . DB::esc($code) . "' LIMIT 1");
@@ -173,6 +188,25 @@ diag_row($noIp === 0, '各站台允許連入的 IP',
     . '若來源站有固定出口 IP，建議填寫；若 IP 會變動則請改用「接受的來源網站」或 VPN／專網</b>');
 diag_row(ALLOW_HTTP != 1, '允許非 HTTPS 回呼',
     ALLOW_HTTP != 1 ? '關閉（正式環境正確）' : '<b class="warn">ALLOW_HTTP=1，正式環境應為 0</b>');
+$mockOn = (defined('NEWEB_GATEWAY_URL') && NEWEB_GATEWAY_URL !== '') || (defined('NEWEB_QUERY_URL') && NEWEB_QUERY_URL !== '');
+diag_row(!$mockOn, '模擬閘道設定',
+    $mockOn
+        ? '<b class="bad">config.php 仍設定了 NEWEB_GATEWAY_URL / NEWEB_QUERY_URL 指向模擬閘道。'
+          . '正式收款會把 POST 打到模擬器，線上等於收不到錢 — 請把 config.php 裡那兩行整行刪除</b>'
+        : '未設定（正式環境正確）');
+echo '</table>';
+
+echo '<h2>上線前必辦（live 模式會擋）</h2><table>';
+$issues = GoLiveGuard::issues();
+if (count($issues) === 0) {
+    echo '<tr><td class="ok">✔</td><td>全部項目都已完成</td></tr>';
+} else {
+    foreach ($issues as $i) {
+        $cls = $i['level'] === 'block' ? 'bad' : 'warn';
+        echo '<tr><td class="' . $cls . '">' . ($i['level'] === 'block' ? '✘' : '⚠') . ' ' . nw_e($i['item']) . '</td>'
+            . '<td>' . nw_e($i['msg']) . '<br><span class="muted">→ ' . nw_e($i['fix']) . '</span></td></tr>';
+    }
+}
 echo '</table>';
 if ($flash !== '') {
     echo '<div class="notice">' . nw_e($flash) . '</div>';
@@ -208,6 +242,7 @@ if ($err !== '') {
       <?php $weak = PayGateway::weakSecretReason($r['secret']); if ($weak !== '') { echo '<br><span class="warn">⚠ 金鑰：' . nw_e($weak) . '</span>'; } ?></td>
     <td>
       <a class="btn ghost sm" href="pay_sources_admin.php?edit=<?php echo urlencode($r['source_code']); ?>">編輯</a>
+      <a class="btn ghost sm" href="pay_sources_admin.php?act=regen&code=<?php echo urlencode($r['source_code']); ?>">換金鑰</a>
       <a class="btn ghost sm" href="pay_sources_admin.php?act=toggle&code=<?php echo urlencode($r['source_code']); ?>"><?php echo $r['is_active'] ? '停用' : '啟用'; ?></a>
       <a class="btn ghost sm" href="pay_sources_admin.php?act=delete&code=<?php echo urlencode($r['source_code']); ?>">刪除</a>
     </td>

@@ -12,6 +12,7 @@
  */
 
 require_once(dirname(__FILE__) . '/includes/common.php');
+nw_go_live_guard();
 
 $ip = nw_client_ip();
 $src = nw_req('src', 'notify');

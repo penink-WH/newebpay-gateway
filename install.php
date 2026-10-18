@@ -8,6 +8,7 @@
  */
 
 require_once(dirname(__FILE__) . '/includes/common.php');
+nw_go_live_guard();
 
 $allowRun = 1;   // ← 上線後請改為 0（並刪除本檔）
 

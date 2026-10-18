@@ -9,6 +9,7 @@
  */
 
 require_once(dirname(__FILE__) . '/includes/common.php');
+nw_go_live_guard();
 require_once(dirname(__FILE__) . '/includes/layout.php');
 
 nw_require_admin();   // 訂單查詢含敏感資訊，需登入或帶 key

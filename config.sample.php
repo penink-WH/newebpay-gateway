@@ -12,16 +12,21 @@
 define('DB_HOST', '127.0.0.1');
 define('DB_PORT', 3306);
 define('DB_USER', 'newebpay');
-define('DB_PASS', 'put-your-password');
+define('DB_PASS', '');                // 請用專屬帳號，不要用 root
 define('DB_NAME', 'newebpay_gateway');
 define('DB_CHARSET', 'utf8');        // MySQL 5.5 以下請用 utf8（=utf8mb3）
 
 // ---------------------------------------------------------------- 藍新金流
 // 測試環境 https://ccore.newebpay.com ｜ 正式環境 https://core.newebpay.com
+// 正式收款時：NEWEB_ENV 改為 'live'，並確認下方 NEWEB_GATEWAY_URL / NEWEB_QUERY_URL
+// 兩行是「註解狀態」（留著會讓程式打到模擬閘道，線上等於收不到錢）。
 define('NEWEB_ENV', 'test');          // test | live
-define('NEWEB_MERCHANT_ID', 'MS00000000');
-define('NEWEB_HASH_KEY', '');         // 32 碼
-define('NEWEB_HASH_IV', '');          // 16 碼
+// ⚠ 請勿使用藍新技術手冊上的範例金鑰（那是公開文件裡的值，任何人都知道）。
+//   正式收款必須填入你自己商店的參數：藍新後台 → 會員中心 → 商店管理 →
+//   商店資料設定 → 串接設定 → 商店代號 / API 串接金鑰（Hash Key、Hash IV）
+define('NEWEB_MERCHANT_ID', '');      // 商店代號，例如 MS12345678
+define('NEWEB_HASH_KEY', '');         // HashKey（32 碼）
+define('NEWEB_HASH_IV', '');          // HashIV（16 碼）
 define('NEWEB_VERSION', '2.3');       // 串接版本
 define('NEWEB_PAD_BLOCK', 32);        // 藍新官方外掛以 32 bytes 補齊；若改 16 請一併確認藍新端
 // 測試時可指向模擬閘道；正式環境請刪除或留空
@@ -37,7 +42,7 @@ define('ORDER_PREFIX', 'NW');         // 訂單編號前綴（MerchantOrderNo �
 
 // ---------------------------------------------------------------- 後台管理
 // pay_query.php 會顯示訂單、消費者信箱、ATM 虛擬帳號，務必設定
-define('ADMIN_PASSWORD', 'change-this-password');
+define('ADMIN_PASSWORD', '');         // 後台（交易查詢／站台設定／模擬面板）的密碼，至少 12 碼
 define('ADMIN_KEY', '');              // 選用：程式化查詢用（?key=...），留空則只能登入
 
 // wh-console 後台設定（僅顯示用：公告、客服信箱；取不到會自動退回預設值，不影響付款）

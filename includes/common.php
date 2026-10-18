@@ -58,6 +58,7 @@ require_once(dirname(__FILE__) . '/NewebPayCrypto.php');
 require_once(dirname(__FILE__) . '/Http.php');
 require_once(dirname(__FILE__) . '/PayGateway.php');
 require_once(dirname(__FILE__) . '/RemoteConfig.php');
+require_once(dirname(__FILE__) . '/Guard.php');
 
 // ---------------------------------------------------------------- 基本工具
 
@@ -177,6 +178,16 @@ function nw_deny($status, $title, $reason, $mode)
     echo '<p class="muted">此請求已被拒絕並記錄於本系統日誌；若有疑問請洽系統管理員。</p>';
     nw_page_foot();
     exit;
+}
+
+/**
+ * 上線防呆：live 環境必做的檢查，未完成就拒絕服務
+ * （各頁面在 require common.php 之後呼叫）
+ */
+function nw_go_live_guard()
+{
+    $script = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '';
+    GoLiveGuard::enforce($script);
 }
 
 function nw_redirect($url)
