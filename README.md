@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy\windows-deploy.ps1 `
 - 自我檢查後會把暫存的測試檔清乾淨，並還原測試站台設定。
 
 > Windows 的 PHP 內建伺服器是單一執行緒，跑不了「模擬藍新回呼自己」的流程，
-> 因此 `-RunE2E` 在 Windows 會自動略過並提示：部署到 IIS 後照第九節的清單手動點一次完整流程。
+> 因此 `-RunE2E` 在 Windows 會自動略過並提示：部署到 IIS 後照〈模擬面板〉與〈安全注意事項與上線檢查〉兩章手動點一次完整流程。
 
 ---
 
@@ -244,7 +244,7 @@ virtual_account, bank_code, bank_name, branch_name, expire_date, timestamp, sign
 ```
 
 - `status`：`PAID` / `FAILED` / `CANCELLED` / `REFUNDED` / `VACC_ISSUED`（ATM 已取號）
-- 簽章同第四節（不含 `sign`，ksort，HMAC-SHA256 轉大寫）。
+- 簽章同〈來源站台如何轉送付款需求〉的算法（不含 `sign`，ksort，HMAC-SHA256 轉大寫）。
 - **來源站台務必回應字串包含 `OK`**（可在 `config.php` 的 `CALLBACK_ACK` 調整；設空字串則只看 HTTP code）。
 - 每次嘗試（含重試）都寫入 `pay_callbacks`：HTTP code、回應內容、耗時、成功與否。
 
@@ -371,7 +371,7 @@ PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8811 -t .     # 需要多 worker：模
 
 - 程式碼以 **MIT** 授權釋出（見 `LICENSE`），可自由修改再用於商業專案。
 - **金流實作務必自行審查後再上線**：本專案提供了簽章驗證、金額核對、重放防護與回呼記錄，
-  但金流系統的風險由部署者自行承擔。請至少完成第八節的上線檢查清單。
+  但金流系統的風險由部署者自行承擔。請至少完成〈安全注意事項與上線檢查〉的清單。
 - `config.php` 不在版控內，請以 `config.sample.php` 建立並填入**自己商店**的
   MerchantID / HashKey / HashIV 與資料庫密碼。
 - 開源版 `config.sample.php` 中的金鑰為藍新技術手冊的公開範例值，

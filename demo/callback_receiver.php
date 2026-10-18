@@ -17,15 +17,22 @@ if (count($post) === 0) {
     $post = $_GET;
 }
 
-$sign = isset($post['sign']) ? $post['sign'] : '';
-unset($post['sign']);
-$expect = nw_sign($secret, $post, 'sign');
-$ok = NewebPayCrypto::safeEquals($expect, strtoupper($sign));
+// 沒有帶簽章或完全沒有參數 → 只是有人用瀏覽器開這個頁面看日誌，不算錯誤
+$isCallback = isset($_POST['sign']) || count($_POST) > 0;
+if ($isCallback) {
+    $sign = isset($post['sign']) ? $post['sign'] : '';
+    unset($post['sign']);
+    $expect = nw_sign($secret, $post, 'sign');
+    $ok = NewebPayCrypto::safeEquals($expect, strtoupper($sign));
 
-$line = '[' . date('Y-m-d H:i:s') . '] ' . ($ok ? '簽章正確' : '簽章錯誤') . ' ' . json_encode($_POST, JSON_UNESCAPED_UNICODE) . "\n";
-@file_put_contents($logFile, $line, FILE_APPEND);
+    $line = '[' . date('Y-m-d H:i:s') . '] ' . ($ok ? '簽章正確' : '簽章錯誤')
+        . ' ' . json_encode($_POST, JSON_UNESCAPED_UNICODE) . "\n";
+    @file_put_contents($logFile, $line, FILE_APPEND);
+} else {
+    $ok = null;
+}
 
-if (!empty($_POST) || !empty($_GET)) {
+if ($isCallback) {
     header('Content-Type: text/plain; charset=utf-8');
     echo $ok ? 'OK' : 'FAIL: sign error';
     exit;

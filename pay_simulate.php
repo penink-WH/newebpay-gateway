@@ -248,7 +248,7 @@ echo '</p>';
 
 echo '<h2>回呼失敗演練（驗證重試與紀錄）</h2><p>';
 echo sim_btn('cbfail', '⑩ 來源站台連線失敗（重試後 FAILED）', $order['order_no'], $back);
-echo sim_btn('cbnoack', '⑪ 來源站台回應非 OK（需 demo/，會暫時換金鑰再還原）', $order['order_no'], $back);
+echo sim_btn('cbnoack', '⑪ 來源站台回應非 OK（需 demo/；會暫時換金鑰，因此接收端日誌會出現一次「簽章錯誤」，屬預期）', $order['order_no'], $back);
 echo '</p>';
 
 echo '<h2>重設</h2><p>';

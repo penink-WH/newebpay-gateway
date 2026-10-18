@@ -620,8 +620,9 @@ check('模擬面板：重複通知不增加回呼紀錄', count(PayGateway::call
     $cbBefore . ' → ' . count(PayGateway::callbacks($simOrderNo)));
 
 // 情境：回應非 OK（需要 demo/callback_receiver.php）
-$receiver = $base . '/demo/callback_receiver.php';
-if (strpos(@file_get_contents($receiver), 'FAIL: sign error') !== false) {
+// 純檔案檢查即可，不要用 HTTP 探測（否則會在來源站台日誌留下一筆假的簽章錯誤）
+$receiverFile = dirname(__FILE__) . '/../demo/callback_receiver.php';
+if (file_exists($receiverFile)) {
     Http::postForm($base . '/pay_simulate.php', array('act' => 'reset', 'ono' => $simOrderNo, 'back' => $simBack), 20, $jar);
     Http::postForm($base . '/pay_simulate.php', array('act' => 'cbnoack', 'ono' => $simOrderNo, 'back' => $simBack), 40, $jar);
     $o3 = PayGateway::getOrder($simOrderNo);
